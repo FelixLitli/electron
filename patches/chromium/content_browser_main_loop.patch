@@ -5,13 +5,13 @@ Subject: content_browser_main_loop.patch
 
 Pass idle quit closure for main message loop, so that pending tasks are
 run before shutdown. This is required to cleanup WebContents asynchronously
-in atom::CommonWebContentsDelegate::ResetManageWebContents.
+in electron::api::WebContents::ResetManagedWebContents.
 
 diff --git a/content/browser/browser_main_loop.cc b/content/browser/browser_main_loop.cc
-index 00d50221bbb63070be48e2493e766242b76724c8..ce20a8dc5135a9b9b6565ac3f1daf0cbeb2df185 100644
+index e0d0bfa23791bb747ea0421b2723f28cea521e0e..3b02440c2b909d8fc22b3aca33d138391c15b449 100644
 --- a/content/browser/browser_main_loop.cc
 +++ b/content/browser/browser_main_loop.cc
-@@ -1504,7 +1504,7 @@ void BrowserMainLoop::MainMessageLoopRun() {
+@@ -1406,7 +1406,7 @@ void BrowserMainLoop::MainMessageLoopRun() {
    NOTREACHED();
  #else
    base::RunLoop run_loop;

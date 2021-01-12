@@ -1,13 +1,9 @@
 // Modules to control application life and create native browser window
-const { app, BrowserWindow } = require('electron')
-
-// Keep a global reference of the window object, if you don't, the window will
-// be closed automatically when the JavaScript object is garbage collected.
-let mainWindow
+const { app, BrowserWindow, ipcMain } = require('electron')
 
 function createWindow () {
   // Create the browser window.
-  mainWindow = new BrowserWindow({
+  const mainWindow = new BrowserWindow({
     width: 800,
     height: 600,
     webPreferences: {
@@ -18,15 +14,27 @@ function createWindow () {
   // and load the index.html of the app.
   mainWindow.loadFile('index.html')
 
-  // Open the DevTools.
-  // mainWindow.webContents.openDevTools()
+  let demoWindow
+  ipcMain.on('show-demo-window', () => {
+    if (demoWindow) {
+      demoWindow.focus()
+      return
+    }
+    demoWindow = new BrowserWindow({ width: 600, height: 400 })
+    demoWindow.loadURL('https://electronjs.org')
+    demoWindow.on('close', () => {
+      mainWindow.webContents.send('window-close')
+    })
+    demoWindow.on('focus', () => {
+      mainWindow.webContents.send('window-focus')
+    })
+    demoWindow.on('blur', () => {
+      mainWindow.webContents.send('window-blur')
+    })
+  })
 
-  // Emitted when the window is closed.
-  mainWindow.on('closed', function () {
-    // Dereference the window object, usually you would store windows
-    // in an array if your app supports multi windows, this is the time
-    // when you should delete the corresponding element.
-    mainWindow = null
+  ipcMain.on('focus-demo-window', () => {
+    if (demoWindow) demoWindow.focus()
   })
 }
 
@@ -37,7 +45,7 @@ app.whenReady().then(createWindow)
 
 // Quit when all windows are closed.
 app.on('window-all-closed', function () {
-  // On OS X it is common for applications and their menu bar
+  // On macOS it is common for applications and their menu bar
   // to stay active until the user quits explicitly with Cmd + Q
   if (process.platform !== 'darwin') {
     app.quit()
@@ -45,7 +53,7 @@ app.on('window-all-closed', function () {
 })
 
 app.on('activate', function () {
-  // On OS X it's common to re-create a window in the app when the
+  // On macOS it is common to re-create a window in the app when the
   // dock icon is clicked and there are no other windows open.
   if (mainWindow === null) {
     createWindow()

@@ -9,7 +9,6 @@
 #include "base/bind.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
-#include "components/keyed_service/content/browser_context_keyed_service_shutdown_notifier_factory.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/extension_navigation_ui_data.h"
 #include "net/base/ip_endpoint.h"
@@ -45,7 +44,8 @@ ProxyingWebSocket::ProxyingWebSocket(
           /*is_download=*/false,
           /*is_async=*/true,
           /*is_service_worker_script=*/false,
-          /*navigation_id=*/base::nullopt)) {}
+          /*navigation_id=*/base::nullopt,
+          /*ukm_source_id=*/ukm::kInvalidSourceIdObj)) {}
 
 ProxyingWebSocket::~ProxyingWebSocket() {
   if (on_before_send_headers_callback_) {
@@ -116,11 +116,16 @@ void ProxyingWebSocket::ContinueToHeadersReceived() {
   OnHeadersReceivedComplete(net::OK);
 }
 
+void ProxyingWebSocket::OnFailure(const std::string& message,
+                                  int32_t net_error,
+                                  int32_t response_code) {}
+
 void ProxyingWebSocket::OnConnectionEstablished(
     mojo::PendingRemote<network::mojom::WebSocket> websocket,
     mojo::PendingReceiver<network::mojom::WebSocketClient> client_receiver,
     network::mojom::WebSocketHandshakeResponsePtr response,
-    mojo::ScopedDataPipeConsumerHandle readable) {
+    mojo::ScopedDataPipeConsumerHandle readable,
+    mojo::ScopedDataPipeProducerHandle writable) {
   DCHECK(forwarding_handshake_client_);
   DCHECK(!is_done_);
   is_done_ = true;
@@ -128,6 +133,7 @@ void ProxyingWebSocket::OnConnectionEstablished(
   client_receiver_ = std::move(client_receiver);
   handshake_response_ = std::move(response);
   readable_ = std::move(readable);
+  writable_ = std::move(writable);
 
   response_->remote_endpoint = handshake_response_->remote_endpoint;
 
@@ -145,7 +151,7 @@ void ProxyingWebSocket::OnConnectionEstablished(
           handshake_response_->status_code,
           handshake_response_->status_text.c_str()));
   for (const auto& header : handshake_response_->headers)
-    response_->headers->AddHeader(header->name + ": " + header->value);
+    response_->headers->AddHeader(header->name, header->value);
 
   ContinueToHeadersReceived();
 }
@@ -156,7 +162,8 @@ void ProxyingWebSocket::ContinueToCompleted() {
   web_request_api_->OnCompleted(&info_, request_, net::ERR_WS_UPGRADE);
   forwarding_handshake_client_->OnConnectionEstablished(
       std::move(websocket_), std::move(client_receiver_),
-      std::move(handshake_response_), std::move(readable_));
+      std::move(handshake_response_), std::move(readable_),
+      std::move(writable_));
 
   // Deletes |this|.
   delete this;
@@ -372,24 +379,19 @@ void ProxyingWebSocket::OnHeadersReceivedComplete(int error_code) {
     ContinueToCompleted();
 }
 
-void ProxyingWebSocket::OnAuthRequiredComplete(
-    extensions::ExtensionWebRequestEventRouter::AuthRequiredResponse rv) {
+void ProxyingWebSocket::OnAuthRequiredComplete(AuthRequiredResponse rv) {
   CHECK(auth_required_callback_);
   ResumeIncomingMethodCallProcessing();
   switch (rv) {
-    case extensions::ExtensionWebRequestEventRouter::AuthRequiredResponse::
-        AUTH_REQUIRED_RESPONSE_NO_ACTION:
-    case extensions::ExtensionWebRequestEventRouter::AuthRequiredResponse::
-        AUTH_REQUIRED_RESPONSE_CANCEL_AUTH:
+    case AuthRequiredResponse::kNoAction:
+    case AuthRequiredResponse::kCancelAuth:
       std::move(auth_required_callback_).Run(base::nullopt);
       break;
 
-    case extensions::ExtensionWebRequestEventRouter::AuthRequiredResponse::
-        AUTH_REQUIRED_RESPONSE_SET_AUTH:
+    case AuthRequiredResponse::kSetAuth:
       std::move(auth_required_callback_).Run(auth_credentials_);
       break;
-    case extensions::ExtensionWebRequestEventRouter::AuthRequiredResponse::
-        AUTH_REQUIRED_RESPONSE_IO_PENDING:
+    case AuthRequiredResponse::kIoPending:
       NOTREACHED();
       break;
   }
@@ -407,8 +409,7 @@ void ProxyingWebSocket::OnHeadersReceivedCompleteForAuth(
 
   auto continuation = base::BindRepeating(
       &ProxyingWebSocket::OnAuthRequiredComplete, weak_factory_.GetWeakPtr());
-  auto auth_rv = extensions::ExtensionWebRequestEventRouter::
-      AuthRequiredResponse::AUTH_REQUIRED_RESPONSE_IO_PENDING;
+  auto auth_rv = AuthRequiredResponse::kIoPending;
   PauseIncomingMethodCallProcessing();
 
   OnAuthRequiredComplete(auth_rv);
@@ -441,7 +442,7 @@ void ProxyingWebSocket::OnError(int error_code) {
 void ProxyingWebSocket::OnMojoConnectionErrorWithCustomReason(
     uint32_t custom_reason,
     const std::string& description) {
-  // Here we want to nofiy the custom reason to the client, which is why
+  // Here we want to notify the custom reason to the client, which is why
   // we reset |forwarding_handshake_client_| manually.
   forwarding_handshake_client_.ResetWithReason(custom_reason, description);
   OnError(net::ERR_FAILED);

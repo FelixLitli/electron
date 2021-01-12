@@ -9,8 +9,8 @@
 #include <utility>
 
 #include "base/strings/utf_string_conversions.h"
+#include "shell/browser/ui/inspectable_web_contents.h"
 #include "shell/browser/ui/inspectable_web_contents_delegate.h"
-#include "shell/browser/ui/inspectable_web_contents_impl.h"
 #include "shell/browser/ui/inspectable_web_contents_view_delegate.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/webview/webview.h"
@@ -49,16 +49,17 @@ class DevToolsWindowDelegate : public views::ClientView,
   base::string16 GetWindowTitle() const override { return shell_->GetTitle(); }
   gfx::ImageSkia GetWindowAppIcon() override { return GetWindowIcon(); }
   gfx::ImageSkia GetWindowIcon() override { return icon_; }
-  const views::Widget* GetWidgetImpl() const override { return widget_; }
+  views::Widget* GetWidget() override { return widget_; }
+  const views::Widget* GetWidget() const override { return widget_; }
   views::View* GetContentsView() override { return view_; }
   views::ClientView* CreateClientView(views::Widget* widget) override {
     return this;
   }
 
   // views::ClientView:
-  bool CanClose() override {
+  views::CloseRequestResult OnWindowCloseRequested() override {
     shell_->inspectable_web_contents()->CloseDevTools();
-    return false;
+    return views::CloseRequestResult::kCannotClose;
   }
 
  private:
@@ -73,12 +74,12 @@ class DevToolsWindowDelegate : public views::ClientView,
 }  // namespace
 
 InspectableWebContentsView* CreateInspectableContentsView(
-    InspectableWebContentsImpl* inspectable_web_contents) {
+    InspectableWebContents* inspectable_web_contents) {
   return new InspectableWebContentsViewViews(inspectable_web_contents);
 }
 
 InspectableWebContentsViewViews::InspectableWebContentsViewViews(
-    InspectableWebContentsImpl* inspectable_web_contents)
+    InspectableWebContents* inspectable_web_contents)
     : inspectable_web_contents_(inspectable_web_contents),
       devtools_window_web_view_(nullptr),
       contents_web_view_(nullptr),
@@ -86,11 +87,9 @@ InspectableWebContentsViewViews::InspectableWebContentsViewViews(
       devtools_visible_(false),
       devtools_window_delegate_(nullptr),
       title_(base::ASCIIToUTF16("Developer Tools")) {
-  set_owned_by_client();
-
   if (!inspectable_web_contents_->IsGuest() &&
       inspectable_web_contents_->GetWebContents()->GetNativeView()) {
-    views::WebView* contents_web_view = new views::WebView(nullptr);
+    auto* contents_web_view = new views::WebView(nullptr);
     contents_web_view->SetWebContents(
         inspectable_web_contents_->GetWebContents());
     contents_web_view_ = contents_web_view;
@@ -187,7 +186,7 @@ void InspectableWebContentsViewViews::SetIsDocked(bool docked, bool activate) {
     params.delegate = devtools_window_delegate_;
     params.bounds = inspectable_web_contents()->GetDevToolsBounds();
 
-#if defined(USE_X11)
+#if defined(OS_LINUX)
     params.wm_role_name = "devtools";
     if (GetDelegate())
       GetDelegate()->GetDevToolsWindowWMClass(&params.wm_class_name,

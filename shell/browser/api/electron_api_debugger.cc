@@ -12,9 +12,10 @@
 #include "base/json/json_writer.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/web_contents.h"
+#include "gin/object_template_builder.h"
+#include "gin/per_isolate_data.h"
+#include "shell/browser/javascript_environment.h"
 #include "shell/common/gin_converters/value_converter.h"
-#include "shell/common/gin_helper/dictionary.h"
-#include "shell/common/gin_helper/object_template_builder.h"
 #include "shell/common/node_includes.h"
 
 using content::DevToolsAgentHost;
@@ -23,10 +24,10 @@ namespace electron {
 
 namespace api {
 
+gin::WrapperInfo Debugger::kWrapperInfo = {gin::kEmbedderNativeGin};
+
 Debugger::Debugger(v8::Isolate* isolate, content::WebContents* web_contents)
-    : content::WebContentsObserver(web_contents), web_contents_(web_contents) {
-  Init(isolate);
-}
+    : content::WebContentsObserver(web_contents), web_contents_(web_contents) {}
 
 Debugger::~Debugger() = default;
 
@@ -41,8 +42,10 @@ void Debugger::DispatchProtocolMessage(DevToolsAgentHost* agent_host,
                                        base::span<const uint8_t> message) {
   DCHECK(agent_host == agent_host_);
 
-  v8::Locker locker(isolate());
-  v8::HandleScope handle_scope(isolate());
+  v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+
+  v8::Locker locker(isolate);
+  v8::HandleScope handle_scope(isolate);
 
   base::StringPiece message_str(reinterpret_cast<const char*>(message.data()),
                                 message.size());
@@ -51,18 +54,19 @@ void Debugger::DispatchProtocolMessage(DevToolsAgentHost* agent_host,
                                        base::JSON_REPLACE_INVALID_CHARACTERS);
   if (!parsed_message || !parsed_message->is_dict())
     return;
-  base::DictionaryValue* dict =
-      static_cast<base::DictionaryValue*>(parsed_message.get());
+  auto* dict = static_cast<base::DictionaryValue*>(parsed_message.get());
   int id;
   if (!dict->GetInteger("id", &id)) {
     std::string method;
     if (!dict->GetString("method", &method))
       return;
+    std::string session_id;
+    dict->GetString("sessionId", &session_id);
     base::DictionaryValue* params_value = nullptr;
     base::DictionaryValue params;
     if (dict->GetDictionary("params", &params_value))
       params.Swap(params_value);
-    Emit("message", method, params);
+    Emit("message", method, params, session_id);
   } else {
     auto it = pending_requests_.find(id);
     if (it == pending_requests_.end())
@@ -96,24 +100,24 @@ void Debugger::RenderFrameHostChanged(content::RenderFrameHost* old_rfh,
   }
 }
 
-void Debugger::Attach(gin_helper::Arguments* args) {
+void Debugger::Attach(gin::Arguments* args) {
   std::string protocol_version;
   args->GetNext(&protocol_version);
 
   if (agent_host_) {
-    args->ThrowError("Debugger is already attached to the target");
+    args->ThrowTypeError("Debugger is already attached to the target");
     return;
   }
 
   if (!protocol_version.empty() &&
       !DevToolsAgentHost::IsSupportedProtocolVersion(protocol_version)) {
-    args->ThrowError("Requested protocol version is not supported");
+    args->ThrowTypeError("Requested protocol version is not supported");
     return;
   }
 
   agent_host_ = DevToolsAgentHost::GetOrCreateFor(web_contents_);
   if (!agent_host_) {
-    args->ThrowError("No target available");
+    args->ThrowTypeError("No target available");
     return;
   }
 
@@ -131,8 +135,9 @@ void Debugger::Detach() {
   AgentHostClosed(agent_host_.get());
 }
 
-v8::Local<v8::Promise> Debugger::SendCommand(gin_helper::Arguments* args) {
-  gin_helper::Promise<base::DictionaryValue> promise(isolate());
+v8::Local<v8::Promise> Debugger::SendCommand(gin::Arguments* args) {
+  v8::Isolate* isolate = args->isolate();
+  gin_helper::Promise<base::DictionaryValue> promise(isolate);
   v8::Local<v8::Promise> handle = promise.GetHandle();
 
   if (!agent_host_) {
@@ -149,14 +154,25 @@ v8::Local<v8::Promise> Debugger::SendCommand(gin_helper::Arguments* args) {
   base::DictionaryValue command_params;
   args->GetNext(&command_params);
 
+  std::string session_id;
+  if (args->GetNext(&session_id) && session_id.empty()) {
+    promise.RejectWithErrorMessage("Empty session id is not allowed");
+    return handle;
+  }
+
   base::DictionaryValue request;
   int request_id = ++previous_request_id_;
   pending_requests_.emplace(request_id, std::move(promise));
   request.SetInteger("id", request_id);
   request.SetString("method", method);
-  if (!command_params.empty())
+  if (!command_params.empty()) {
     request.Set("params",
                 base::Value::ToUniquePtrValue(command_params.Clone()));
+  }
+
+  if (!session_id.empty()) {
+    request.SetString("sessionId", session_id);
+  }
 
   std::string json_args;
   base::JSONWriter::Write(request, &json_args);
@@ -177,36 +193,20 @@ gin::Handle<Debugger> Debugger::Create(v8::Isolate* isolate,
   return gin::CreateHandle(isolate, new Debugger(isolate, web_contents));
 }
 
-// static
-void Debugger::BuildPrototype(v8::Isolate* isolate,
-                              v8::Local<v8::FunctionTemplate> prototype) {
-  prototype->SetClassName(gin::StringToV8(isolate, "Debugger"));
-  gin_helper::ObjectTemplateBuilder(isolate, prototype->PrototypeTemplate())
+gin::ObjectTemplateBuilder Debugger::GetObjectTemplateBuilder(
+    v8::Isolate* isolate) {
+  return gin_helper::EventEmitterMixin<Debugger>::GetObjectTemplateBuilder(
+             isolate)
       .SetMethod("attach", &Debugger::Attach)
       .SetMethod("isAttached", &Debugger::IsAttached)
       .SetMethod("detach", &Debugger::Detach)
       .SetMethod("sendCommand", &Debugger::SendCommand);
 }
 
+const char* Debugger::GetTypeName() {
+  return "Debugger";
+}
+
 }  // namespace api
 
 }  // namespace electron
-
-namespace {
-
-using electron::api::Debugger;
-
-void Initialize(v8::Local<v8::Object> exports,
-                v8::Local<v8::Value> unused,
-                v8::Local<v8::Context> context,
-                void* priv) {
-  v8::Isolate* isolate = context->GetIsolate();
-  gin_helper::Dictionary(isolate, exports)
-      .Set("Debugger", Debugger::GetConstructor(isolate)
-                           ->GetFunction(context)
-                           .ToLocalChecked());
-}
-
-}  // namespace
-
-NODE_LINKED_MODULE_CONTEXT_AWARE(atom_browser_debugger, Initialize)

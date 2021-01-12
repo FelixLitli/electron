@@ -43,8 +43,14 @@ void MediaAccessAllowed(const content::MediaStreamRequest& request,
 }
 
 void OnPointerLockResponse(content::WebContents* web_contents, bool allowed) {
-  if (web_contents)
-    web_contents->GotResponseToLockMouseRequest(allowed);
+  if (web_contents) {
+    if (allowed)
+      web_contents->GotResponseToLockMouseRequest(
+          blink::mojom::PointerLockResult::kSuccess);
+    else
+      web_contents->GotResponseToLockMouseRequest(
+          blink::mojom::PointerLockResult::kPermissionDenied);
+  }
 }
 
 void OnPermissionResponse(base::OnceCallback<void(bool)> callback,
@@ -152,6 +158,14 @@ bool WebContentsPermissionHelper::CheckMediaAccessPermission(
   // The permission type doesn't matter here, AUDIO_CAPTURE/VIDEO_CAPTURE
   // are presented as same type in content_converter.h.
   return CheckPermission(content::PermissionType::AUDIO_CAPTURE, &details);
+}
+
+bool WebContentsPermissionHelper::CheckSerialAccessPermission(
+    const url::Origin& embedding_origin) const {
+  base::DictionaryValue details;
+  details.SetString("securityOrigin", embedding_origin.GetURL().spec());
+  return CheckPermission(
+      static_cast<content::PermissionType>(PermissionType::SERIAL), &details);
 }
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(WebContentsPermissionHelper)

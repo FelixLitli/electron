@@ -32,6 +32,8 @@ namespace gin_helper {
 class WrappableBase {
  public:
   WrappableBase();
+  WrappableBase(const WrappableBase&) = delete;
+  WrappableBase& operator=(const WrappableBase&) = delete;
   virtual ~WrappableBase();
 
   // Retrieve the v8 wrapper object cooresponding to this object.
@@ -52,6 +54,8 @@ class WrappableBase {
   // Helper to init with arguments.
   void InitWithArgs(gin::Arguments* args);
 
+  v8::Global<v8::Object> wrapper_;  // Weak
+
  private:
   static void FirstWeakCallback(
       const v8::WeakCallbackInfo<WrappableBase>& data);
@@ -59,9 +63,6 @@ class WrappableBase {
       const v8::WeakCallbackInfo<WrappableBase>& data);
 
   v8::Isolate* isolate_ = nullptr;
-  v8::Global<v8::Object> wrapper_;  // Weak
-
-  DISALLOW_COPY_AND_ASSIGN(WrappableBase);
 };
 
 }  // namespace gin_helper

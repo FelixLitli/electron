@@ -11,28 +11,30 @@ It adds the following events, properties, and methods:
 ## Sandbox
 
 In sandboxed renderers the `process` object contains only a subset of the APIs:
-- `crash()`
-- `hang()`
-- `getCreationTime()`
-- `getHeapStatistics()`
-- `getBlinkMemoryInfo()`
-- `getProcessMemoryInfo()`
-- `getSystemMemoryInfo()`
-- `getSystemVersion()`
-- `getCPUUsage()`
-- `getIOCounters()`
-- `argv`
-- `execPath`
-- `env`
-- `pid`
-- `arch`
-- `platform`
-- `sandboxed`
-- `type`
-- `version`
-- `versions`
-- `mas`
-- `windowsStore`
+
+* `crash()`
+* `hang()`
+* `getCreationTime()`
+* `getHeapStatistics()`
+* `getBlinkMemoryInfo()`
+* `getProcessMemoryInfo()`
+* `getSystemMemoryInfo()`
+* `getSystemVersion()`
+* `getCPUUsage()`
+* `getIOCounters()`
+* `uptime()`
+* `argv`
+* `execPath`
+* `env`
+* `pid`
+* `arch`
+* `platform`
+* `sandboxed`
+* `type`
+* `version`
+* `versions`
+* `mas`
+* `windowsStore`
 
 ## Events
 
@@ -104,6 +106,7 @@ A `Boolean` that controls whether or not deprecations printed to `stderr` includ
  This property is instead of the `--trace-deprecation` command line flag.
 
 ### `process.traceProcessWarnings`
+
 A `Boolean` that controls whether or not process warnings printed to `stderr` include
  their stack trace. Setting this to `true` will print stack traces for process warnings
  (including deprecations). This property is instead of the `--trace-warnings` command
@@ -111,7 +114,11 @@ A `Boolean` that controls whether or not process warnings printed to `stderr` in
 
 ### `process.type` _Readonly_
 
-A `String` representing the current process's type, can be `"browser"` (i.e. main process), `"renderer"`, or `"worker"` (i.e. web worker).
+A `String` representing the current process's type, can be:
+
+* `browser` - The main process
+* `renderer` - A renderer process
+* `worker` - In a web worker
 
 ### `process.versions.chrome` _Readonly_
 

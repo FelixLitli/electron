@@ -16,10 +16,12 @@
 #include "gin/dictionary.h"
 #include "gin/object_template_builder.h"
 #include "net/cookies/canonical_cookie.h"
+#include "net/cookies/cookie_inclusion_status.h"
 #include "net/cookies/cookie_store.h"
 #include "net/cookies/cookie_util.h"
 #include "shell/browser/cookie_change_notifier.h"
 #include "shell/browser/electron_browser_context.h"
+#include "shell/browser/javascript_environment.h"
 #include "shell/common/gin_converters/gurl_converter.h"
 #include "shell/common/gin_converters/value_converter.h"
 #include "shell/common/gin_helper/dictionary.h"
@@ -28,6 +30,25 @@
 using content::BrowserThread;
 
 namespace gin {
+
+template <>
+struct Converter<net::CookieSameSite> {
+  static v8::Local<v8::Value> ToV8(v8::Isolate* isolate,
+                                   const net::CookieSameSite& val) {
+    switch (val) {
+      case net::CookieSameSite::UNSPECIFIED:
+        return ConvertToV8(isolate, "unspecified");
+      case net::CookieSameSite::NO_RESTRICTION:
+        return ConvertToV8(isolate, "no_restriction");
+      case net::CookieSameSite::LAX_MODE:
+        return ConvertToV8(isolate, "lax");
+      case net::CookieSameSite::STRICT_MODE:
+        return ConvertToV8(isolate, "strict");
+    }
+    DCHECK(false);
+    return ConvertToV8(isolate, "unknown");
+  }
+};
 
 template <>
 struct Converter<net::CanonicalCookie> {
@@ -44,6 +65,7 @@ struct Converter<net::CanonicalCookie> {
     dict.Set("session", !val.IsPersistent());
     if (val.IsPersistent())
       dict.Set("expirationDate", val.ExpiryDate().ToDoubleT());
+    dict.Set("sameSite", val.SameSite());
     return ConvertToV8(isolate, dict).As<v8::Object>();
   }
 };
@@ -131,12 +153,13 @@ void FilterCookies(const base::Value& filter,
   promise.Resolve(result);
 }
 
-void FilterCookieWithStatuses(const base::Value& filter,
-                              gin_helper::Promise<net::CookieList> promise,
-                              const net::CookieStatusList& list,
-                              const net::CookieStatusList& excluded_list) {
+void FilterCookieWithStatuses(
+    const base::Value& filter,
+    gin_helper::Promise<net::CookieList> promise,
+    const net::CookieAccessResultList& list,
+    const net::CookieAccessResultList& excluded_list) {
   FilterCookies(filter, std::move(promise),
-                net::cookie_util::StripStatuses(list));
+                net::cookie_util::StripAccessResults(list));
 }
 
 // Parse dictionary property to CanonicalCookie time correctly.
@@ -148,34 +171,55 @@ base::Time ParseTimeProperty(const base::Optional<double>& value) {
   return base::Time::FromDoubleT(*value);
 }
 
-std::string InclusionStatusToString(
-    net::CanonicalCookie::CookieInclusionStatus status) {
-  if (status.HasExclusionReason(
-          net::CanonicalCookie::CookieInclusionStatus::EXCLUDE_HTTP_ONLY))
+std::string InclusionStatusToString(net::CookieInclusionStatus status) {
+  if (status.HasExclusionReason(net::CookieInclusionStatus::EXCLUDE_HTTP_ONLY))
     return "Failed to create httponly cookie";
   if (status.HasExclusionReason(
-          net::CanonicalCookie::CookieInclusionStatus::EXCLUDE_SECURE_ONLY))
+          net::CookieInclusionStatus::EXCLUDE_SECURE_ONLY))
     return "Cannot create a secure cookie from an insecure URL";
-  if (status.HasExclusionReason(net::CanonicalCookie::CookieInclusionStatus::
-                                    EXCLUDE_FAILURE_TO_STORE))
+  if (status.HasExclusionReason(
+          net::CookieInclusionStatus::EXCLUDE_FAILURE_TO_STORE))
     return "Failed to parse cookie";
   if (status.HasExclusionReason(
-          net::CanonicalCookie::CookieInclusionStatus::EXCLUDE_INVALID_DOMAIN))
+          net::CookieInclusionStatus::EXCLUDE_INVALID_DOMAIN))
     return "Failed to get cookie domain";
   if (status.HasExclusionReason(
-          net::CanonicalCookie::CookieInclusionStatus::EXCLUDE_INVALID_PREFIX))
+          net::CookieInclusionStatus::EXCLUDE_INVALID_PREFIX))
     return "Failed because the cookie violated prefix rules.";
-  if (status.HasExclusionReason(net::CanonicalCookie::CookieInclusionStatus::
-                                    EXCLUDE_NONCOOKIEABLE_SCHEME))
+  if (status.HasExclusionReason(
+          net::CookieInclusionStatus::EXCLUDE_NONCOOKIEABLE_SCHEME))
     return "Cannot set cookie for current scheme";
   return "Setting cookie failed";
 }
 
+std::string StringToCookieSameSite(const std::string* str_ptr,
+                                   net::CookieSameSite* same_site) {
+  if (!str_ptr) {
+    *same_site = net::CookieSameSite::NO_RESTRICTION;
+    return "";
+  }
+  const std::string& str = *str_ptr;
+  if (str == "unspecified") {
+    *same_site = net::CookieSameSite::UNSPECIFIED;
+  } else if (str == "no_restriction") {
+    *same_site = net::CookieSameSite::NO_RESTRICTION;
+  } else if (str == "lax") {
+    *same_site = net::CookieSameSite::LAX_MODE;
+  } else if (str == "strict") {
+    *same_site = net::CookieSameSite::STRICT_MODE;
+  } else {
+    return "Failed to convert '" + str +
+           "' to an appropriate cookie same site value";
+  }
+  return "";
+}
+
 }  // namespace
+
+gin::WrapperInfo Cookies::kWrapperInfo = {gin::kEmbedderNativeGin};
 
 Cookies::Cookies(v8::Isolate* isolate, ElectronBrowserContext* browser_context)
     : browser_context_(browser_context) {
-  Init(isolate);
   cookie_change_subscription_ =
       browser_context_->cookie_change_notifier()->RegisterCookieChangeCallback(
           base::BindRepeating(&Cookies::OnCookieChanged,
@@ -184,16 +228,17 @@ Cookies::Cookies(v8::Isolate* isolate, ElectronBrowserContext* browser_context)
 
 Cookies::~Cookies() = default;
 
-v8::Local<v8::Promise> Cookies::Get(const gin_helper::Dictionary& filter) {
-  gin_helper::Promise<net::CookieList> promise(isolate());
+v8::Local<v8::Promise> Cookies::Get(v8::Isolate* isolate,
+                                    const gin_helper::Dictionary& filter) {
+  gin_helper::Promise<net::CookieList> promise(isolate);
   v8::Local<v8::Promise> handle = promise.GetHandle();
 
-  auto* storage_partition = content::BrowserContext::GetDefaultStoragePartition(
-      browser_context_.get());
+  auto* storage_partition =
+      content::BrowserContext::GetDefaultStoragePartition(browser_context_);
   auto* manager = storage_partition->GetCookieManagerForBrowserProcess();
 
   base::DictionaryValue dict;
-  gin::ConvertFromV8(isolate(), filter.GetHandle(), &dict);
+  gin::ConvertFromV8(isolate, filter.GetHandle(), &dict);
 
   std::string url;
   filter.Get("url", &url);
@@ -204,7 +249,7 @@ v8::Local<v8::Promise> Cookies::Get(const gin_helper::Dictionary& filter) {
     net::CookieOptions options;
     options.set_include_httponly();
     options.set_same_site_cookie_context(
-        net::CookieOptions::SameSiteCookieContext::SAME_SITE_STRICT);
+        net::CookieOptions::SameSiteCookieContext::MakeInclusive());
     options.set_do_not_update_access_time();
 
     manager->GetCookieList(GURL(url), options,
@@ -215,17 +260,18 @@ v8::Local<v8::Promise> Cookies::Get(const gin_helper::Dictionary& filter) {
   return handle;
 }
 
-v8::Local<v8::Promise> Cookies::Remove(const GURL& url,
+v8::Local<v8::Promise> Cookies::Remove(v8::Isolate* isolate,
+                                       const GURL& url,
                                        const std::string& name) {
-  gin_helper::Promise<void> promise(isolate());
+  gin_helper::Promise<void> promise(isolate);
   v8::Local<v8::Promise> handle = promise.GetHandle();
 
   auto cookie_deletion_filter = network::mojom::CookieDeletionFilter::New();
   cookie_deletion_filter->url = url;
   cookie_deletion_filter->cookie_name = name;
 
-  auto* storage_partition = content::BrowserContext::GetDefaultStoragePartition(
-      browser_context_.get());
+  auto* storage_partition =
+      content::BrowserContext::GetDefaultStoragePartition(browser_context_);
   auto* manager = storage_partition->GetCookieManagerForBrowserProcess();
 
   manager->DeleteCookies(
@@ -239,24 +285,37 @@ v8::Local<v8::Promise> Cookies::Remove(const GURL& url,
   return handle;
 }
 
-v8::Local<v8::Promise> Cookies::Set(base::DictionaryValue details) {
-  gin_helper::Promise<void> promise(isolate());
+v8::Local<v8::Promise> Cookies::Set(v8::Isolate* isolate,
+                                    const base::DictionaryValue& details) {
+  gin_helper::Promise<void> promise(isolate);
   v8::Local<v8::Promise> handle = promise.GetHandle();
 
   const std::string* url_string = details.FindStringKey("url");
+  if (!url_string) {
+    promise.RejectWithErrorMessage("Missing required option 'url'");
+  }
   const std::string* name = details.FindStringKey("name");
   const std::string* value = details.FindStringKey("value");
   const std::string* domain = details.FindStringKey("domain");
   const std::string* path = details.FindStringKey("path");
   bool secure = details.FindBoolKey("secure").value_or(false);
   bool http_only = details.FindBoolKey("httpOnly").value_or(false);
+  const std::string* same_site_string = details.FindStringKey("sameSite");
+  net::CookieSameSite same_site;
+  std::string error = StringToCookieSameSite(same_site_string, &same_site);
+  if (!error.empty()) {
+    promise.RejectWithErrorMessage(error);
+    return handle;
+  }
+  bool same_party =
+      details.FindBoolKey("sameParty")
+          .value_or(secure && same_site != net::CookieSameSite::STRICT_MODE);
 
   GURL url(url_string ? *url_string : "");
   if (!url.is_valid()) {
     promise.RejectWithErrorMessage(
-        InclusionStatusToString(net::CanonicalCookie::CookieInclusionStatus(
-            net::CanonicalCookie::CookieInclusionStatus::
-                EXCLUDE_INVALID_DOMAIN)));
+        InclusionStatusToString(net::CookieInclusionStatus(
+            net::CookieInclusionStatus::EXCLUDE_INVALID_DOMAIN)));
     return handle;
   }
 
@@ -266,32 +325,31 @@ v8::Local<v8::Promise> Cookies::Set(base::DictionaryValue details) {
       ParseTimeProperty(details.FindDoubleKey("creationDate")),
       ParseTimeProperty(details.FindDoubleKey("expirationDate")),
       ParseTimeProperty(details.FindDoubleKey("lastAccessDate")), secure,
-      http_only, net::CookieSameSite::NO_RESTRICTION,
-      net::COOKIE_PRIORITY_DEFAULT);
+      http_only, same_site, net::COOKIE_PRIORITY_DEFAULT, same_party);
   if (!canonical_cookie || !canonical_cookie->IsCanonical()) {
     promise.RejectWithErrorMessage(
-        InclusionStatusToString(net::CanonicalCookie::CookieInclusionStatus(
-            net::CanonicalCookie::CookieInclusionStatus::
-                EXCLUDE_FAILURE_TO_STORE)));
+        InclusionStatusToString(net::CookieInclusionStatus(
+            net::CookieInclusionStatus::EXCLUDE_FAILURE_TO_STORE)));
     return handle;
   }
   net::CookieOptions options;
   if (http_only) {
     options.set_include_httponly();
   }
+  options.set_same_site_cookie_context(
+      net::CookieOptions::SameSiteCookieContext::MakeInclusive());
 
-  auto* storage_partition = content::BrowserContext::GetDefaultStoragePartition(
-      browser_context_.get());
+  auto* storage_partition =
+      content::BrowserContext::GetDefaultStoragePartition(browser_context_);
   auto* manager = storage_partition->GetCookieManagerForBrowserProcess();
   manager->SetCanonicalCookie(
-      *canonical_cookie, url.scheme(), options,
+      *canonical_cookie, url, options,
       base::BindOnce(
-          [](gin_helper::Promise<void> promise,
-             net::CanonicalCookie::CookieInclusionStatus status) {
-            if (status.IsInclude()) {
+          [](gin_helper::Promise<void> promise, net::CookieAccessResult r) {
+            if (r.status.IsInclude()) {
               promise.Resolve();
             } else {
-              promise.RejectWithErrorMessage(InclusionStatusToString(status));
+              promise.RejectWithErrorMessage(InclusionStatusToString(r.status));
             }
           },
           std::move(promise)));
@@ -299,12 +357,12 @@ v8::Local<v8::Promise> Cookies::Set(base::DictionaryValue details) {
   return handle;
 }
 
-v8::Local<v8::Promise> Cookies::FlushStore() {
-  gin_helper::Promise<void> promise(isolate());
+v8::Local<v8::Promise> Cookies::FlushStore(v8::Isolate* isolate) {
+  gin_helper::Promise<void> promise(isolate);
   v8::Local<v8::Promise> handle = promise.GetHandle();
 
-  auto* storage_partition = content::BrowserContext::GetDefaultStoragePartition(
-      browser_context_.get());
+  auto* storage_partition =
+      content::BrowserContext::GetDefaultStoragePartition(browser_context_);
   auto* manager = storage_partition->GetCookieManagerForBrowserProcess();
 
   manager->FlushCookieStore(base::BindOnce(
@@ -314,9 +372,11 @@ v8::Local<v8::Promise> Cookies::FlushStore() {
 }
 
 void Cookies::OnCookieChanged(const net::CookieChangeInfo& change) {
-  Emit("changed", gin::ConvertToV8(isolate(), change.cookie),
-       gin::ConvertToV8(isolate(), change.cause),
-       gin::ConvertToV8(isolate(),
+  v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+  v8::HandleScope scope(isolate);
+  Emit("changed", gin::ConvertToV8(isolate, change.cookie),
+       gin::ConvertToV8(isolate, change.cause),
+       gin::ConvertToV8(isolate,
                         change.cause != net::CookieChangeCause::INSERTED));
 }
 
@@ -326,15 +386,18 @@ gin::Handle<Cookies> Cookies::Create(v8::Isolate* isolate,
   return gin::CreateHandle(isolate, new Cookies(isolate, browser_context));
 }
 
-// static
-void Cookies::BuildPrototype(v8::Isolate* isolate,
-                             v8::Local<v8::FunctionTemplate> prototype) {
-  prototype->SetClassName(gin::StringToV8(isolate, "Cookies"));
-  gin_helper::ObjectTemplateBuilder(isolate, prototype->PrototypeTemplate())
+gin::ObjectTemplateBuilder Cookies::GetObjectTemplateBuilder(
+    v8::Isolate* isolate) {
+  return gin_helper::EventEmitterMixin<Cookies>::GetObjectTemplateBuilder(
+             isolate)
       .SetMethod("get", &Cookies::Get)
       .SetMethod("remove", &Cookies::Remove)
       .SetMethod("set", &Cookies::Set)
       .SetMethod("flushStore", &Cookies::FlushStore);
+}
+
+const char* Cookies::GetTypeName() {
+  return "Cookies";
 }
 
 }  // namespace api

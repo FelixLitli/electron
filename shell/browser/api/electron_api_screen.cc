@@ -14,6 +14,7 @@
 #include "shell/common/gin_converters/callback_converter.h"
 #include "shell/common/gin_converters/gfx_converter.h"
 #include "shell/common/gin_converters/native_window_converter.h"
+#include "shell/common/gin_helper/dictionary.h"
 #include "shell/common/gin_helper/object_template_builder.h"
 #include "shell/common/node_includes.h"
 #include "ui/display/display.h"
@@ -28,16 +29,9 @@ namespace electron {
 
 namespace api {
 
-namespace {
+gin::WrapperInfo Screen::kWrapperInfo = {gin::kEmbedderNativeGin};
 
-// Find an item in container according to its ID.
-template <class T>
-typename T::iterator FindById(T* container, int id) {
-  auto predicate = [id](const typename T::value_type& item) -> bool {
-    return item.id() == id;
-  };
-  return std::find_if(container->begin(), container->end(), predicate);
-}
+namespace {
 
 // Convert the changed_metrics bitmask to string array.
 std::vector<std::string> MetricsToArray(uint32_t metrics) {
@@ -71,7 +65,6 @@ void DelayEmitWithMetrics(Screen* screen,
 Screen::Screen(v8::Isolate* isolate, display::Screen* screen)
     : screen_(screen) {
   screen_->AddObserver(this);
-  Init(isolate);
 }
 
 Screen::~Screen() {
@@ -153,11 +146,10 @@ v8::Local<v8::Value> Screen::Create(gin_helper::ErrorThrower error_thrower) {
       .ToV8();
 }
 
-// static
-void Screen::BuildPrototype(v8::Isolate* isolate,
-                            v8::Local<v8::FunctionTemplate> prototype) {
-  prototype->SetClassName(gin::StringToV8(isolate, "Screen"));
-  gin_helper::ObjectTemplateBuilder(isolate, prototype->PrototypeTemplate())
+gin::ObjectTemplateBuilder Screen::GetObjectTemplateBuilder(
+    v8::Isolate* isolate) {
+  return gin_helper::EventEmitterMixin<Screen>::GetObjectTemplateBuilder(
+             isolate)
       .SetMethod("getCursorScreenPoint", &Screen::GetCursorScreenPoint)
       .SetMethod("getPrimaryDisplay", &Screen::GetPrimaryDisplay)
       .SetMethod("getAllDisplays", &Screen::GetAllDisplays)
@@ -169,6 +161,10 @@ void Screen::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("dipToScreenRect", &DIPToScreenRect)
 #endif
       .SetMethod("getDisplayMatching", &Screen::GetDisplayMatching);
+}
+
+const char* Screen::GetTypeName() {
+  return "Screen";
 }
 
 }  // namespace api
@@ -184,13 +180,10 @@ void Initialize(v8::Local<v8::Object> exports,
                 v8::Local<v8::Context> context,
                 void* priv) {
   v8::Isolate* isolate = context->GetIsolate();
-  gin::Dictionary dict(isolate, exports);
-  dict.Set("createScreen", base::BindRepeating(&Screen::Create));
-  dict.Set(
-      "Screen",
-      Screen::GetConstructor(isolate)->GetFunction(context).ToLocalChecked());
+  gin_helper::Dictionary dict(isolate, exports);
+  dict.SetMethod("createScreen", base::BindRepeating(&Screen::Create));
 }
 
 }  // namespace
 
-NODE_LINKED_MODULE_CONTEXT_AWARE(atom_common_screen, Initialize)
+NODE_LINKED_MODULE_CONTEXT_AWARE(electron_common_screen, Initialize)

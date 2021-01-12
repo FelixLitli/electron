@@ -20,16 +20,18 @@
 #include "content/public/renderer/render_thread.h"
 #include "content/public/renderer/render_view.h"
 #include "electron/buildflags/buildflags.h"
+#include "media/blink/multibuffer_data_source.h"
 #include "printing/buildflags/buildflags.h"
 #include "shell/common/color_util.h"
 #include "shell/common/gin_helper/dictionary.h"
 #include "shell/common/options_switches.h"
+#include "shell/common/world_ids.h"
 #include "shell/renderer/browser_exposed_renderer_interfaces.h"
 #include "shell/renderer/content_settings_observer.h"
 #include "shell/renderer/electron_api_service_impl.h"
 #include "shell/renderer/electron_autofill_agent.h"
-#include "shell/renderer/electron_render_frame_observer.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
+#include "third_party/blink/public/common/web_preferences/web_preferences.h"
 #include "third_party/blink/public/web/blink.h"
 #include "third_party/blink/public/web/web_custom_element.h"  // NOLINT(build/include_alpha)
 #include "third_party/blink/public/web/web_frame_widget.h"
@@ -39,7 +41,7 @@
 #include "third_party/blink/public/web/web_view.h"
 #include "third_party/blink/renderer/platform/weborigin/scheme_registry.h"  // nogncheck
 
-#if defined(OS_MACOSX)
+#if defined(OS_MAC)
 #include "base/strings/sys_string_conversions.h"
 #endif
 
@@ -62,7 +64,7 @@
 
 #if BUILDFLAG(ENABLE_PRINTING)
 #include "components/printing/renderer/print_render_frame_helper.h"
-#include "printing/print_settings.h"
+#include "printing/print_settings.h"  // nogncheck
 #include "shell/renderer/printing/print_render_frame_helper_delegate.h"
 #endif  // BUILDFLAG(ENABLE_PRINTING)
 
@@ -101,8 +103,16 @@ RendererClientBase::RendererClientBase() {
       ParseSchemesCLISwitch(command_line, switches::kStandardSchemes);
   for (const std::string& scheme : standard_schemes_list)
     url::AddStandardScheme(scheme.c_str(), url::SCHEME_WITH_HOST);
-  isolated_world_ = base::CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kContextIsolation);
+  // Parse --cors-schemes=scheme1,scheme2
+  std::vector<std::string> cors_schemes_list =
+      ParseSchemesCLISwitch(command_line, switches::kCORSSchemes);
+  for (const std::string& scheme : cors_schemes_list)
+    url::AddCorsEnabledScheme(scheme.c_str());
+  // Parse --streaming-schemes=scheme1,scheme2
+  std::vector<std::string> streaming_schemes_list =
+      ParseSchemesCLISwitch(command_line, switches::kStreamingSchemes);
+  for (const std::string& scheme : streaming_schemes_list)
+    media::AddStreamingScheme(scheme.c_str());
   // We rely on the unique process host id which is notified to the
   // renderer process via command line switch from the content layer,
   // if this switch is removed from the content layer for some reason,
@@ -122,13 +132,6 @@ void RendererClientBase::DidCreateScriptContext(
       "%s-%" PRId64, renderer_client_id_.c_str(), ++next_context_id_);
   gin_helper::Dictionary global(context->GetIsolate(), context->Global());
   global.SetHidden("contextId", context_id);
-
-#if BUILDFLAG(ENABLE_REMOTE_MODULE)
-  auto* command_line = base::CommandLine::ForCurrentProcess();
-  bool enableRemoteModule =
-      command_line->HasSwitch(switches::kEnableRemoteModule);
-  global.SetHidden("enableRemoteModule", enableRemoteModule);
-#endif
 }
 
 void RendererClientBase::AddRenderBindings(
@@ -142,6 +145,8 @@ void RendererClientBase::RenderThreadStarted() {
   // On macOS, popup menus are rendered by the main process by default.
   // This causes problems in OSR, since when the popup is rendered separately,
   // it won't be captured in the rendered image.
+  // TODO(loc): This will be wrong for in-process child windows, as this
+  // function won't run again for them.
   if (command_line->HasSwitch(options::kOffscreen)) {
     blink::WebView::SetUseExternalPopupMenus(false);
   }
@@ -159,9 +164,14 @@ void RendererClientBase::RenderThreadStarted() {
   thread->AddObserver(extensions_renderer_client_->GetDispatcher());
 #endif
 
+#if BUILDFLAG(ENABLE_PDF_VIEWER)
+  // Enables printing from Chrome PDF viewer.
+  pdf_print_client_.reset(new ChromePDFPrintClient());
+  pdf::PepperPDFHost::SetPrintClient(pdf_print_client_.get());
+#endif
+
 #if BUILDFLAG(ENABLE_BUILTIN_SPELLCHECKER)
-  if (command_line->HasSwitch(switches::kEnableSpellcheck))
-    spellcheck_ = std::make_unique<SpellCheck>(this);
+  spellcheck_ = std::make_unique<SpellCheck>(this);
 #endif
 
   blink::WebCustomElement::AddEmbedderCustomElementName("webview");
@@ -257,11 +267,11 @@ void RendererClientBase::RenderFrameCreated(
   if (render_frame->IsMainFrame() && render_view) {
     blink::WebView* webview = render_view->GetWebView();
     if (webview) {
-      base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
-      if (cmd->HasSwitch(switches::kGuestInstanceID)) {  // webview.
+      auto prefs = render_frame->GetBlinkPreferences();
+      if (prefs.guest_instance_id) {  // webview.
         webview->SetBaseBackgroundColor(SK_ColorTRANSPARENT);
       } else {  // normal window.
-        std::string name = cmd->GetSwitchValueASCII(switches::kBackgroundColor);
+        std::string name = prefs.background_color;
         SkColor color =
             name.empty() ? SK_ColorTRANSPARENT : ParseHexColor(name);
         webview->SetBaseBackgroundColor(color);
@@ -283,8 +293,7 @@ void RendererClientBase::RenderFrameCreated(
 #endif
 
 #if BUILDFLAG(ENABLE_BUILTIN_SPELLCHECKER)
-  auto* command_line = base::CommandLine::ForCurrentProcess();
-  if (command_line->HasSwitch(switches::kEnableSpellcheck))
+  if (render_frame->GetBlinkPreferences().enable_spellcheck)
     new SpellCheckProvider(render_frame, spellcheck_.get(), this);
 #endif
 }
@@ -313,12 +322,11 @@ bool RendererClientBase::OverrideCreatePlugin(
     content::RenderFrame* render_frame,
     const blink::WebPluginParams& params,
     blink::WebPlugin** plugin) {
-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   if (params.mime_type.Utf8() == content::kBrowserPluginMimeType ||
 #if BUILDFLAG(ENABLE_PDF_VIEWER)
       params.mime_type.Utf8() == kPdfPluginMimeType ||
 #endif  // BUILDFLAG(ENABLE_PDF_VIEWER)
-      command_line->HasSwitch(switches::kEnablePlugins))
+      render_frame->GetBlinkPreferences().enable_plugins)
     return false;
 
   *plugin = nullptr;
@@ -346,7 +354,7 @@ void RendererClientBase::DidSetUserAgent(const std::string& user_agent) {
 #endif
 }
 
-content::BrowserPluginDelegate* RendererClientBase::CreateBrowserPluginDelegate(
+guest_view::GuestViewContainer* RendererClientBase::CreateBrowserPluginDelegate(
     content::RenderFrame* render_frame,
     const content::WebPluginInfo& info,
     const std::string& mime_type,
@@ -365,7 +373,7 @@ bool RendererClientBase::IsPluginHandledExternally(
     const blink::WebElement& plugin_element,
     const GURL& original_url,
     const std::string& mime_type) {
-#if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS) && BUILDFLAG(ENABLE_PLUGINS)
+#if BUILDFLAG(ENABLE_PDF_VIEWER)
   DCHECK(plugin_element.HasHTMLTagName("object") ||
          plugin_element.HasHTMLTagName("embed"));
   // TODO(nornagon): this info should be shared with the data in
@@ -389,7 +397,11 @@ bool RendererClientBase::IsPluginHandledExternally(
 
 bool RendererClientBase::IsOriginIsolatedPepperPlugin(
     const base::FilePath& plugin_path) {
+#if BUILDFLAG(ENABLE_PDF_VIEWER)
   return plugin_path.value() == kPdfPluginPath;
+#else
+  return false;
+#endif
 }
 
 std::unique_ptr<blink::WebPrescientNetworking>
@@ -423,8 +435,10 @@ void RendererClientBase::RunScriptsAtDocumentEnd(
 v8::Local<v8::Context> RendererClientBase::GetContext(
     blink::WebLocalFrame* frame,
     v8::Isolate* isolate) const {
-  if (isolated_world())
-    return frame->WorldScriptContext(isolate, World::ISOLATED_WORLD);
+  auto* render_frame = content::RenderFrame::FromWebFrame(frame);
+  DCHECK(render_frame);
+  if (render_frame && render_frame->GetBlinkPreferences().context_isolation)
+    return frame->WorldScriptContext(isolate, WorldIDs::ISOLATED_WORLD_ID);
   else
     return frame->MainWorldScriptContext();
 }

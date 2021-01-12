@@ -10,11 +10,15 @@
 #include <vector>
 
 #include "gin/handle.h"
+#include "gin/wrappable.h"
+#include "shell/browser/event_emitter_mixin.h"
+#include "shell/browser/javascript_environment.h"
 #include "shell/browser/ui/tray_icon.h"
 #include "shell/browser/ui/tray_icon_observer.h"
 #include "shell/common/gin_converters/guid_converter.h"
+#include "shell/common/gin_helper/cleaned_up_at_exit.h"
+#include "shell/common/gin_helper/constructible.h"
 #include "shell/common/gin_helper/error_thrower.h"
-#include "shell/common/gin_helper/trackable_object.h"
 
 namespace gfx {
 class Image;
@@ -26,27 +30,33 @@ class Dictionary;
 
 namespace electron {
 
-class TrayIcon;
-
 namespace api {
 
 class Menu;
 class NativeImage;
 
-class Tray : public gin_helper::TrackableObject<Tray>, public TrayIconObserver {
+class Tray : public gin::Wrappable<Tray>,
+             public gin_helper::EventEmitterMixin<Tray>,
+             public gin_helper::Constructible<Tray>,
+             public gin_helper::CleanedUpAtExit,
+             public TrayIconObserver {
  public:
-  static gin_helper::WrappableBase* New(gin_helper::ErrorThrower thrower,
-                                        gin::Handle<NativeImage> image,
-                                        base::Optional<UUID> guid,
-                                        gin_helper::Arguments* args);
+  // gin_helper::Constructible
+  static gin::Handle<Tray> New(gin_helper::ErrorThrower thrower,
+                               v8::Local<v8::Value> image,
+                               base::Optional<UUID> guid,
+                               gin::Arguments* args);
+  static v8::Local<v8::ObjectTemplate> FillObjectTemplate(
+      v8::Isolate*,
+      v8::Local<v8::ObjectTemplate>);
 
-  static void BuildPrototype(v8::Isolate* isolate,
-                             v8::Local<v8::FunctionTemplate> prototype);
+  // gin::Wrappable
+  static gin::WrapperInfo kWrapperInfo;
 
- protected:
-  Tray(gin::Handle<NativeImage> image,
-       base::Optional<UUID> guid,
-       gin_helper::Arguments* args);
+ private:
+  Tray(v8::Isolate* isolate,
+       v8::Local<v8::Value> image,
+       base::Optional<UUID> guid);
   ~Tray() override;
 
   // TrayIconObserver:
@@ -70,10 +80,15 @@ class Tray : public gin_helper::TrackableObject<Tray>, public TrayIconObserver {
   void OnMouseExited(const gfx::Point& location, int modifiers) override;
   void OnMouseMoved(const gfx::Point& location, int modifiers) override;
 
-  void SetImage(v8::Isolate* isolate, gin::Handle<NativeImage> image);
-  void SetPressedImage(v8::Isolate* isolate, gin::Handle<NativeImage> image);
+  // JS API:
+  void Destroy();
+  bool IsDestroyed();
+  void SetImage(v8::Isolate* isolate, v8::Local<v8::Value> image);
+  void SetPressedImage(v8::Isolate* isolate, v8::Local<v8::Value> image);
   void SetToolTip(const std::string& tool_tip);
-  void SetTitle(const std::string& title);
+  void SetTitle(const std::string& title,
+                const base::Optional<gin_helper::Dictionary>& options,
+                gin::Arguments* args);
   std::string GetTitle();
   void SetIgnoreDoubleClickEvents(bool ignore);
   bool GetIgnoreDoubleClickEvents();
@@ -81,13 +96,14 @@ class Tray : public gin_helper::TrackableObject<Tray>, public TrayIconObserver {
                       const gin_helper::Dictionary& options);
   void RemoveBalloon();
   void Focus();
-  void PopUpContextMenu(gin_helper::Arguments* args);
+  void PopUpContextMenu(gin::Arguments* args);
   void CloseContextMenu();
   void SetContextMenu(gin_helper::ErrorThrower thrower,
                       v8::Local<v8::Value> arg);
   gfx::Rect GetBounds();
 
- private:
+  bool CheckAlive();
+
   v8::Global<v8::Value> menu_;
   std::unique_ptr<TrayIcon> tray_icon_;
 

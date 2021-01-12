@@ -17,6 +17,10 @@ bool ScopedDisableResize::disable_resize_ = false;
 
 }  // namespace electron
 
+@interface NSWindow (PrivateAPI)
+- (NSImage*)_cornerMask;
+@end
+
 @implementation ElectronNSWindow
 
 @synthesize acceptsFirstMouse;
@@ -89,11 +93,23 @@ bool ScopedDisableResize::disable_resize_ = false;
   if (electron::ScopedDisableResize::IsResizeDisabled())
     return [self frame];
 
+  NSRect result = [super constrainFrameRect:frameRect toScreen:screen];
   // Enable the window to be larger than screen.
-  if ([self enableLargerThanScreen])
-    return frameRect;
-  else
-    return [super constrainFrameRect:frameRect toScreen:screen];
+  if ([self enableLargerThanScreen]) {
+    // If we have a frame, ensure that we only position the window
+    // somewhere where the user can move or resize it (and not
+    // behind the menu bar, for instance)
+    //
+    // If there's no frame, put the window wherever the developer
+    // wanted it to go
+    if (shell_->has_frame()) {
+      result.size = frameRect.size;
+    } else {
+      result = frameRect;
+    }
+  }
+
+  return result;
 }
 
 - (void)setFrame:(NSRect)windowFrame display:(BOOL)displayViews {
@@ -109,19 +125,22 @@ bool ScopedDisableResize::disable_resize_ = false;
   if (![attribute isEqualToString:@"AXChildren"])
     return [super accessibilityAttributeValue:attribute];
 
-  // Filter out objects that aren't the title bar buttons. This has the effect
-  // of removing the window title, which VoiceOver already sees.
+  // We want to remove the window title (also known as
+  // NSAccessibilityReparentingCellProxy), which VoiceOver already sees.
   // * when VoiceOver is disabled, this causes Cmd+C to be used for TTS but
   //   still leaves the buttons available in the accessibility tree.
   // * when VoiceOver is enabled, the full accessibility tree is used.
   // Without removing the title and with VO disabled, the TTS would always read
   // the window title instead of using Cmd+C to get the selected text.
-  NSPredicate* predicate = [NSPredicate
-      predicateWithFormat:@"(self isKindOfClass: %@) OR (self.className == %@)",
-                          [NSButtonCell class], @"RenderWidgetHostViewCocoa"];
+  NSPredicate* predicate =
+      [NSPredicate predicateWithFormat:@"(self.className != %@)",
+                                       @"NSAccessibilityReparentingCellProxy"];
 
   NSArray* children = [super accessibilityAttributeValue:attribute];
-  return [children filteredArrayUsingPredicate:predicate];
+  NSMutableArray* mutableChildren = [[children mutableCopy] autorelease];
+  [mutableChildren filterUsingPredicate:predicate];
+
+  return mutableChildren;
 }
 
 - (NSString*)accessibilityTitle {
@@ -143,7 +162,11 @@ bool ScopedDisableResize::disable_resize_ = false;
 // By overriding this built-in method the corners of the vibrant view (if set)
 // will be smooth.
 - (NSImage*)_cornerMask {
-  return [self cornerMask];
+  if (self.vibrantView != nil) {
+    return [self cornerMask];
+  } else {
+    return [super _cornerMask];
+  }
 }
 
 // Quicklook methods
@@ -170,7 +193,7 @@ bool ScopedDisableResize::disable_resize_ = false;
 
 - (void)performClose:(id)sender {
   if (shell_->title_bar_style() ==
-      electron::NativeWindowMac::TitleBarStyle::CUSTOM_BUTTONS_ON_HOVER) {
+      electron::NativeWindowMac::TitleBarStyle::kCustomButtonsOnHover) {
     [[self delegate] windowShouldClose:self];
   } else if (shell_->IsSimpleFullScreen()) {
     if ([[self delegate] respondsToSelector:@selector(windowShouldClose:)]) {
@@ -181,6 +204,10 @@ bool ScopedDisableResize::disable_resize_ = false;
         return;
     }
     [self close];
+  } else if (shell_->is_modal() && shell_->parent() && shell_->IsVisible()) {
+    // We don't want to actually call [window close] here since
+    // we've already called endSheet on the modal sheet.
+    return;
   } else {
     [super performClose:sender];
   }
@@ -192,16 +219,22 @@ bool ScopedDisableResize::disable_resize_ = false;
 
   // If we're in simple fullscreen mode and trying to exit it
   // we need to ensure we exit it properly to prevent a crash
-  // with NSWindowStyleMaskTitled mode
-  if (is_simple_fs || always_simple_fs)
+  // with NSWindowStyleMaskTitled mode.
+  if (is_simple_fs || always_simple_fs) {
     shell_->SetSimpleFullScreen(!is_simple_fs);
-  else
+  } else {
+    bool maximizable = shell_->IsMaximizable();
     [super toggleFullScreen:sender];
+
+    // Exiting fullscreen causes Cocoa to redraw the NSWindow, which resets
+    // the enabled state for NSWindowZoomButton. We need to persist it.
+    shell_->SetMaximizable(maximizable);
+  }
 }
 
 - (void)performMiniaturize:(id)sender {
   if (shell_->title_bar_style() ==
-      electron::NativeWindowMac::TitleBarStyle::CUSTOM_BUTTONS_ON_HOVER)
+      electron::NativeWindowMac::TitleBarStyle::kCustomButtonsOnHover)
     [self miniaturize:self];
   else
     [super performMiniaturize:sender];

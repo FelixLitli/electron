@@ -21,14 +21,17 @@ namespace electron {
 
 namespace api {
 
-NativeTheme::NativeTheme(v8::Isolate* isolate, ui::NativeTheme* theme)
-    : theme_(theme) {
-  theme_->AddObserver(this);
-  Init(isolate);
+gin::WrapperInfo NativeTheme::kWrapperInfo = {gin::kEmbedderNativeGin};
+
+NativeTheme::NativeTheme(v8::Isolate* isolate,
+                         ui::NativeTheme* ui_theme,
+                         ui::NativeTheme* web_theme)
+    : ui_theme_(ui_theme), web_theme_(web_theme) {
+  ui_theme_->AddObserver(this);
 }
 
 NativeTheme::~NativeTheme() {
-  theme_->RemoveObserver(this);
+  ui_theme_->RemoveObserver(this);
 }
 
 void NativeTheme::OnNativeThemeUpdatedOnUI() {
@@ -42,8 +45,9 @@ void NativeTheme::OnNativeThemeUpdated(ui::NativeTheme* theme) {
 }
 
 void NativeTheme::SetThemeSource(ui::NativeTheme::ThemeSource override) {
-  theme_->set_theme_source(override);
-#if defined(OS_MACOSX)
+  ui_theme_->set_theme_source(override);
+  web_theme_->set_theme_source(override);
+#if defined(OS_MAC)
   // Update the macOS appearance setting for this new override value
   UpdateMacOSAppearanceForOverrideValue(override);
 #endif
@@ -52,25 +56,25 @@ void NativeTheme::SetThemeSource(ui::NativeTheme::ThemeSource override) {
 }
 
 ui::NativeTheme::ThemeSource NativeTheme::GetThemeSource() const {
-  return theme_->theme_source();
+  return ui_theme_->theme_source();
 }
 
 bool NativeTheme::ShouldUseDarkColors() {
-  return theme_->ShouldUseDarkColors();
+  return ui_theme_->ShouldUseDarkColors();
 }
 
 bool NativeTheme::ShouldUseHighContrastColors() {
-  return theme_->UsesHighContrastColors();
+  return ui_theme_->UsesHighContrastColors();
 }
 
-#if defined(OS_MACOSX)
+#if defined(OS_MAC)
 const CFStringRef WhiteOnBlack = CFSTR("whiteOnBlack");
 const CFStringRef UniversalAccessDomain = CFSTR("com.apple.universalaccess");
 #endif
 
 // TODO(MarshallOfSound): Implement for Linux
 bool NativeTheme::ShouldUseInvertedColorScheme() {
-#if defined(OS_MACOSX)
+#if defined(OS_MAC)
   CFPreferencesAppSynchronize(UniversalAccessDomain);
   Boolean keyExistsAndHasValidFormat = false;
   Boolean is_inverted = CFPreferencesGetAppBooleanValue(
@@ -79,21 +83,23 @@ bool NativeTheme::ShouldUseInvertedColorScheme() {
     return false;
   return is_inverted;
 #else
-  return color_utils::IsInvertedColorScheme();
+  return ui_theme_->GetPlatformHighContrastColorScheme() ==
+         ui::NativeTheme::PlatformHighContrastColorScheme::kDark;
 #endif
 }
 
 // static
-v8::Local<v8::Value> NativeTheme::Create(v8::Isolate* isolate) {
-  ui::NativeTheme* theme = ui::NativeTheme::GetInstanceForNativeUi();
-  return gin::CreateHandle(isolate, new NativeTheme(isolate, theme)).ToV8();
+gin::Handle<NativeTheme> NativeTheme::Create(v8::Isolate* isolate) {
+  ui::NativeTheme* ui_theme = ui::NativeTheme::GetInstanceForNativeUi();
+  ui::NativeTheme* web_theme = ui::NativeTheme::GetInstanceForWeb();
+  return gin::CreateHandle(isolate,
+                           new NativeTheme(isolate, ui_theme, web_theme));
 }
 
-// static
-void NativeTheme::BuildPrototype(v8::Isolate* isolate,
-                                 v8::Local<v8::FunctionTemplate> prototype) {
-  prototype->SetClassName(gin::StringToV8(isolate, "NativeTheme"));
-  gin_helper::ObjectTemplateBuilder(isolate, prototype->PrototypeTemplate())
+gin::ObjectTemplateBuilder NativeTheme::GetObjectTemplateBuilder(
+    v8::Isolate* isolate) {
+  return gin_helper::EventEmitterMixin<NativeTheme>::GetObjectTemplateBuilder(
+             isolate)
       .SetProperty("shouldUseDarkColors", &NativeTheme::ShouldUseDarkColors)
       .SetProperty("themeSource", &NativeTheme::GetThemeSource,
                    &NativeTheme::SetThemeSource)
@@ -103,11 +109,17 @@ void NativeTheme::BuildPrototype(v8::Isolate* isolate,
                    &NativeTheme::ShouldUseInvertedColorScheme);
 }
 
+const char* NativeTheme::GetTypeName() {
+  return "NativeTheme";
+}
+
 }  // namespace api
 
 }  // namespace electron
 
 namespace {
+
+using electron::api::NativeTheme;
 
 void Initialize(v8::Local<v8::Object> exports,
                 v8::Local<v8::Value> unused,
@@ -115,10 +127,7 @@ void Initialize(v8::Local<v8::Object> exports,
                 void* priv) {
   v8::Isolate* isolate = context->GetIsolate();
   gin::Dictionary dict(isolate, exports);
-  dict.Set("nativeTheme", electron::api::NativeTheme::Create(isolate));
-  dict.Set("NativeTheme", electron::api::NativeTheme::GetConstructor(isolate)
-                              ->GetFunction(context)
-                              .ToLocalChecked());
+  dict.Set("nativeTheme", NativeTheme::Create(isolate));
 }
 
 }  // namespace
@@ -161,4 +170,4 @@ bool Converter<ui::NativeTheme::ThemeSource>::FromV8(
 
 }  // namespace gin
 
-NODE_LINKED_MODULE_CONTEXT_AWARE(atom_common_native_theme, Initialize)
+NODE_LINKED_MODULE_CONTEXT_AWARE(electron_common_native_theme, Initialize)

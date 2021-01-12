@@ -7,14 +7,19 @@
 #include <string>
 
 #include "base/threading/thread_task_runner_handle.h"
+#include "gin/dictionary.h"
+#include "gin/object_template_builder.h"
 #include "shell/browser/api/electron_api_menu.h"
+#include "shell/browser/api/ui_event.h"
 #include "shell/browser/browser.h"
+#include "shell/browser/javascript_environment.h"
 #include "shell/common/api/electron_api_native_image.h"
+#include "shell/common/gin_converters/file_path_converter.h"
 #include "shell/common/gin_converters/gfx_converter.h"
 #include "shell/common/gin_converters/guid_converter.h"
 #include "shell/common/gin_converters/image_converter.h"
 #include "shell/common/gin_helper/dictionary.h"
-#include "shell/common/gin_helper/object_template_builder.h"
+#include "shell/common/gin_helper/function_template_extensions.h"
 #include "shell/common/node_includes.h"
 #include "ui/gfx/image/image.h"
 
@@ -29,19 +34,19 @@ struct Converter<electron::TrayIcon::IconType> {
     std::string mode;
     if (ConvertFromV8(isolate, val, &mode)) {
       if (mode == "none") {
-        *out = IconType::None;
+        *out = IconType::kNone;
         return true;
       } else if (mode == "info") {
-        *out = IconType::Info;
+        *out = IconType::kInfo;
         return true;
       } else if (mode == "warning") {
-        *out = IconType::Warning;
+        *out = IconType::kWarning;
         return true;
       } else if (mode == "error") {
-        *out = IconType::Error;
+        *out = IconType::kError;
         return true;
       } else if (mode == "custom") {
-        *out = IconType::Custom;
+        *out = IconType::kCustom;
         return true;
       }
     }
@@ -55,50 +60,57 @@ namespace electron {
 
 namespace api {
 
-Tray::Tray(gin::Handle<NativeImage> image,
-           base::Optional<UUID> guid,
-           gin_helper::Arguments* args)
-    : tray_icon_(TrayIcon::Create(guid)) {
-  SetImage(args->isolate(), image);
-  tray_icon_->AddObserver(this);
+gin::WrapperInfo Tray::kWrapperInfo = {gin::kEmbedderNativeGin};
 
-  InitWithArgs(args);
+Tray::Tray(v8::Isolate* isolate,
+           v8::Local<v8::Value> image,
+           base::Optional<UUID> guid)
+    : tray_icon_(TrayIcon::Create(guid)) {
+  SetImage(isolate, image);
+  tray_icon_->AddObserver(this);
 }
 
 Tray::~Tray() = default;
 
 // static
-gin_helper::WrappableBase* Tray::New(gin_helper::ErrorThrower thrower,
-                                     gin::Handle<NativeImage> image,
-                                     base::Optional<UUID> guid,
-                                     gin_helper::Arguments* args) {
+gin::Handle<Tray> Tray::New(gin_helper::ErrorThrower thrower,
+                            v8::Local<v8::Value> image,
+                            base::Optional<UUID> guid,
+                            gin::Arguments* args) {
   if (!Browser::Get()->is_ready()) {
     thrower.ThrowError("Cannot create Tray before app is ready");
-    return nullptr;
+    return gin::Handle<Tray>();
   }
 
 #if defined(OS_WIN)
   if (!guid.has_value() && args->Length() > 1) {
     thrower.ThrowError("Invalid GUID format");
-    return nullptr;
+    return gin::Handle<Tray>();
   }
 #endif
 
-  return new Tray(image, guid, args);
+  return gin::CreateHandle(thrower.isolate(),
+                           new Tray(args->isolate(), image, guid));
 }
 
 void Tray::OnClicked(const gfx::Rect& bounds,
                      const gfx::Point& location,
                      int modifiers) {
-  EmitWithFlags("click", modifiers, bounds, location);
+  v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+  v8::HandleScope scope(isolate);
+  EmitCustomEvent("click", CreateEventFromFlags(modifiers), bounds, location);
 }
 
 void Tray::OnDoubleClicked(const gfx::Rect& bounds, int modifiers) {
-  EmitWithFlags("double-click", modifiers, bounds);
+  v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+  v8::HandleScope scope(isolate);
+  EmitCustomEvent("double-click", CreateEventFromFlags(modifiers), bounds);
 }
 
 void Tray::OnRightClicked(const gfx::Rect& bounds, int modifiers) {
-  EmitWithFlags("right-click", modifiers, bounds);
+  v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+  v8::HandleScope scope(isolate);
+  EmitCustomEvent("right-click", CreateEventFromFlags(modifiers), bounds);
 }
 
 void Tray::OnBalloonShow() {
@@ -126,23 +138,33 @@ void Tray::OnDropText(const std::string& text) {
 }
 
 void Tray::OnMouseEntered(const gfx::Point& location, int modifiers) {
-  EmitWithFlags("mouse-enter", modifiers, location);
+  v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+  v8::HandleScope scope(isolate);
+  EmitCustomEvent("mouse-enter", CreateEventFromFlags(modifiers), location);
 }
 
 void Tray::OnMouseExited(const gfx::Point& location, int modifiers) {
-  EmitWithFlags("mouse-leave", modifiers, location);
+  v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+  v8::HandleScope scope(isolate);
+  EmitCustomEvent("mouse-leave", CreateEventFromFlags(modifiers), location);
 }
 
 void Tray::OnMouseMoved(const gfx::Point& location, int modifiers) {
-  EmitWithFlags("mouse-move", modifiers, location);
+  v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+  v8::HandleScope scope(isolate);
+  EmitCustomEvent("mouse-move", CreateEventFromFlags(modifiers), location);
 }
 
 void Tray::OnMouseUp(const gfx::Point& location, int modifiers) {
-  EmitWithFlags("mouse-up", modifiers, location);
+  v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+  v8::HandleScope scope(isolate);
+  EmitCustomEvent("mouse-up", CreateEventFromFlags(modifiers), location);
 }
 
 void Tray::OnMouseDown(const gfx::Point& location, int modifiers) {
-  EmitWithFlags("mouse-down", modifiers, location);
+  v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+  v8::HandleScope scope(isolate);
+  EmitCustomEvent("mouse-down", CreateEventFromFlags(modifiers), location);
 }
 
 void Tray::OnDragEntered() {
@@ -157,35 +179,86 @@ void Tray::OnDragEnded() {
   Emit("drag-end");
 }
 
-void Tray::SetImage(v8::Isolate* isolate, gin::Handle<NativeImage> image) {
+void Tray::Destroy() {
+  menu_.Reset();
+  tray_icon_.reset();
+}
+
+bool Tray::IsDestroyed() {
+  return !tray_icon_;
+}
+
+void Tray::SetImage(v8::Isolate* isolate, v8::Local<v8::Value> image) {
+  if (!CheckAlive())
+    return;
+
+  NativeImage* native_image = nullptr;
+  if (!NativeImage::TryConvertNativeImage(isolate, image, &native_image))
+    return;
+
 #if defined(OS_WIN)
-  tray_icon_->SetImage(image->GetHICON(GetSystemMetrics(SM_CXSMICON)));
+  tray_icon_->SetImage(native_image->GetHICON(GetSystemMetrics(SM_CXSMICON)));
 #else
-  tray_icon_->SetImage(image->image());
+  tray_icon_->SetImage(native_image->image());
 #endif
 }
 
-void Tray::SetPressedImage(v8::Isolate* isolate,
-                           gin::Handle<NativeImage> image) {
+void Tray::SetPressedImage(v8::Isolate* isolate, v8::Local<v8::Value> image) {
+  if (!CheckAlive())
+    return;
+
+  NativeImage* native_image = nullptr;
+  if (!NativeImage::TryConvertNativeImage(isolate, image, &native_image))
+    return;
+
 #if defined(OS_WIN)
-  tray_icon_->SetPressedImage(image->GetHICON(GetSystemMetrics(SM_CXSMICON)));
+  tray_icon_->SetPressedImage(
+      native_image->GetHICON(GetSystemMetrics(SM_CXSMICON)));
 #else
-  tray_icon_->SetPressedImage(image->image());
+  tray_icon_->SetPressedImage(native_image->image());
 #endif
 }
 
 void Tray::SetToolTip(const std::string& tool_tip) {
+  if (!CheckAlive())
+    return;
   tray_icon_->SetToolTip(tool_tip);
 }
 
-void Tray::SetTitle(const std::string& title) {
-#if defined(OS_MACOSX)
-  tray_icon_->SetTitle(title);
+void Tray::SetTitle(const std::string& title,
+                    const base::Optional<gin_helper::Dictionary>& options,
+                    gin::Arguments* args) {
+  if (!CheckAlive())
+    return;
+#if defined(OS_MAC)
+  TrayIcon::TitleOptions title_options;
+  if (options) {
+    if (options->Get("fontType", &title_options.font_type)) {
+      // Validate the font type if it's passed in
+      if (title_options.font_type != "monospaced" &&
+          title_options.font_type != "monospacedDigit") {
+        args->ThrowTypeError(
+            "fontType must be one of 'monospaced' or 'monospacedDigit'");
+        return;
+      }
+    } else if (options->Has("fontType")) {
+      args->ThrowTypeError(
+          "fontType must be one of 'monospaced' or 'monospacedDigit'");
+      return;
+    }
+  } else if (args->Length() >= 2) {
+    args->ThrowTypeError("setTitle options must be an object");
+    return;
+  }
+
+  tray_icon_->SetTitle(title, title_options);
 #endif
 }
 
 std::string Tray::GetTitle() {
-#if defined(OS_MACOSX)
+  if (!CheckAlive())
+    return std::string();
+#if defined(OS_MAC)
   return tray_icon_->GetTitle();
 #else
   return "";
@@ -193,13 +266,17 @@ std::string Tray::GetTitle() {
 }
 
 void Tray::SetIgnoreDoubleClickEvents(bool ignore) {
-#if defined(OS_MACOSX)
+  if (!CheckAlive())
+    return;
+#if defined(OS_MAC)
   tray_icon_->SetIgnoreDoubleClickEvents(ignore);
 #endif
 }
 
 bool Tray::GetIgnoreDoubleClickEvents() {
-#if defined(OS_MACOSX)
+  if (!CheckAlive())
+    return false;
+#if defined(OS_MAC)
   return tray_icon_->GetIgnoreDoubleClickEvents();
 #else
   return false;
@@ -208,6 +285,8 @@ bool Tray::GetIgnoreDoubleClickEvents() {
 
 void Tray::DisplayBalloon(gin_helper::ErrorThrower thrower,
                           const gin_helper::Dictionary& options) {
+  if (!CheckAlive())
+    return;
   TrayIcon::BalloonOptions balloon_options;
 
   if (!options.Get("title", &balloon_options.title) ||
@@ -216,14 +295,20 @@ void Tray::DisplayBalloon(gin_helper::ErrorThrower thrower,
     return;
   }
 
-  gin::Handle<NativeImage> icon;
-  options.Get("icon", &icon);
+  v8::Local<v8::Value> icon_value;
+  NativeImage* icon = nullptr;
+  if (options.Get("icon", &icon_value) &&
+      !NativeImage::TryConvertNativeImage(thrower.isolate(), icon_value,
+                                          &icon)) {
+    return;
+  }
+
   options.Get("iconType", &balloon_options.icon_type);
   options.Get("largeIcon", &balloon_options.large_icon);
   options.Get("noSound", &balloon_options.no_sound);
   options.Get("respectQuietTime", &balloon_options.respect_quiet_time);
 
-  if (!icon.IsEmpty()) {
+  if (icon) {
 #if defined(OS_WIN)
     balloon_options.icon = icon->GetHICON(
         GetSystemMetrics(balloon_options.large_icon ? SM_CXICON : SM_CXSMICON));
@@ -236,27 +321,50 @@ void Tray::DisplayBalloon(gin_helper::ErrorThrower thrower,
 }
 
 void Tray::RemoveBalloon() {
+  if (!CheckAlive())
+    return;
   tray_icon_->RemoveBalloon();
 }
 
 void Tray::Focus() {
+  if (!CheckAlive())
+    return;
   tray_icon_->Focus();
 }
 
-void Tray::PopUpContextMenu(gin_helper::Arguments* args) {
+void Tray::PopUpContextMenu(gin::Arguments* args) {
+  if (!CheckAlive())
+    return;
   gin::Handle<Menu> menu;
-  args->GetNext(&menu);
   gfx::Point pos;
-  args->GetNext(&pos);
+
+  v8::Local<v8::Value> first_arg;
+  if (args->GetNext(&first_arg)) {
+    if (!gin::ConvertFromV8(args->isolate(), first_arg, &menu)) {
+      if (!gin::ConvertFromV8(args->isolate(), first_arg, &pos)) {
+        args->ThrowError();
+        return;
+      }
+    } else if (args->Length() >= 2) {
+      if (!args->GetNext(&pos)) {
+        args->ThrowError();
+        return;
+      }
+    }
+  }
   tray_icon_->PopUpContextMenu(pos, menu.IsEmpty() ? nullptr : menu->model());
 }
 
 void Tray::CloseContextMenu() {
+  if (!CheckAlive())
+    return;
   tray_icon_->CloseContextMenu();
 }
 
 void Tray::SetContextMenu(gin_helper::ErrorThrower thrower,
                           v8::Local<v8::Value> arg) {
+  if (!CheckAlive())
+    return;
   gin::Handle<Menu> menu;
   if (arg->IsNull()) {
     menu_.Reset();
@@ -270,15 +378,29 @@ void Tray::SetContextMenu(gin_helper::ErrorThrower thrower,
 }
 
 gfx::Rect Tray::GetBounds() {
+  if (!CheckAlive())
+    return gfx::Rect();
   return tray_icon_->GetBounds();
 }
 
+bool Tray::CheckAlive() {
+  if (!tray_icon_) {
+    v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+    v8::Locker locker(isolate);
+    v8::HandleScope scope(isolate);
+    gin_helper::ErrorThrower(isolate).ThrowError("Tray is destroyed");
+    return false;
+  }
+  return true;
+}
+
 // static
-void Tray::BuildPrototype(v8::Isolate* isolate,
-                          v8::Local<v8::FunctionTemplate> prototype) {
-  prototype->SetClassName(gin::StringToV8(isolate, "Tray"));
-  gin_helper::Destroyable::MakeDestroyable(isolate, prototype);
-  gin_helper::ObjectTemplateBuilder(isolate, prototype->PrototypeTemplate())
+v8::Local<v8::ObjectTemplate> Tray::FillObjectTemplate(
+    v8::Isolate* isolate,
+    v8::Local<v8::ObjectTemplate> templ) {
+  return gin::ObjectTemplateBuilder(isolate, "Tray", templ)
+      .SetMethod("destroy", &Tray::Destroy)
+      .SetMethod("isDestroyed", &Tray::IsDestroyed)
       .SetMethod("setImage", &Tray::SetImage)
       .SetMethod("setPressedImage", &Tray::SetPressedImage)
       .SetMethod("setToolTip", &Tray::SetToolTip)
@@ -294,7 +416,8 @@ void Tray::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("popUpContextMenu", &Tray::PopUpContextMenu)
       .SetMethod("closeContextMenu", &Tray::CloseContextMenu)
       .SetMethod("setContextMenu", &Tray::SetContextMenu)
-      .SetMethod("getBounds", &Tray::GetBounds);
+      .SetMethod("getBounds", &Tray::GetBounds)
+      .Build();
 }
 
 }  // namespace api
@@ -310,14 +433,11 @@ void Initialize(v8::Local<v8::Object> exports,
                 v8::Local<v8::Context> context,
                 void* priv) {
   v8::Isolate* isolate = context->GetIsolate();
-  Tray::SetConstructor(isolate, base::BindRepeating(&Tray::New));
 
-  gin_helper::Dictionary dict(isolate, exports);
-  dict.Set(
-      "Tray",
-      Tray::GetConstructor(isolate)->GetFunction(context).ToLocalChecked());
+  gin::Dictionary dict(isolate, exports);
+  dict.Set("Tray", Tray::GetConstructor(context));
 }
 
 }  // namespace
 
-NODE_LINKED_MODULE_CONTEXT_AWARE(atom_browser_tray, Initialize)
+NODE_LINKED_MODULE_CONTEXT_AWARE(electron_browser_tray, Initialize)

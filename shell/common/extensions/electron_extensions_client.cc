@@ -39,11 +39,6 @@ class ElectronPermissionMessageProvider
     return extensions::PermissionMessages();
   }
 
-  extensions::PermissionMessages GetPowerfulPermissionMessages(
-      const extensions::PermissionIDSet& permissions) const override {
-    return extensions::PermissionMessages();
-  }
-
   bool IsPrivilegeIncrease(
       const extensions::PermissionSet& granted_permissions,
       const extensions::PermissionSet& requested_permissions,
@@ -102,15 +97,15 @@ void ElectronExtensionsClient::FilterHostPermissions(
   NOTIMPLEMENTED();
 }
 
-void ElectronExtensionsClient::SetScriptingWhitelist(
-    const ExtensionsClient::ScriptingWhitelist& whitelist) {
-  scripting_whitelist_ = whitelist;
+void ElectronExtensionsClient::SetScriptingAllowlist(
+    const ExtensionsClient::ScriptingAllowlist& allowlist) {
+  scripting_allowlist_ = allowlist;
 }
 
-const ExtensionsClient::ScriptingWhitelist&
-ElectronExtensionsClient::GetScriptingWhitelist() const {
+const ExtensionsClient::ScriptingAllowlist&
+ElectronExtensionsClient::GetScriptingAllowlist() const {
   // TODO(jamescook): Real whitelist.
-  return scripting_whitelist_;
+  return scripting_allowlist_;
 }
 
 extensions::URLPatternSet
@@ -135,9 +130,7 @@ const GURL& ElectronExtensionsClient::GetWebstoreUpdateURL() const {
 }
 
 bool ElectronExtensionsClient::IsBlacklistUpdateURL(const GURL& url) const {
-  // TODO(rockot): Maybe we want to do something else here. For now we accept
-  // any URL as a blacklist URL because we don't really care.
-  return true;
+  return false;
 }
 
 }  // namespace electron

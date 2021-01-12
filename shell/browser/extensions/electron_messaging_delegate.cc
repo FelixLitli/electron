@@ -20,10 +20,9 @@
 #include "extensions/browser/pref_names.h"
 #include "extensions/common/api/messaging/port_id.h"
 #include "extensions/common/extension.h"
+#include "shell/browser/api/electron_api_web_contents.h"
 #include "ui/gfx/native_widget_types.h"
 #include "url/gurl.h"
-
-#include "shell/browser/api/electron_api_web_contents.h"
 
 namespace extensions {
 
@@ -42,12 +41,18 @@ ElectronMessagingDelegate::IsNativeMessagingHostAllowed(
 std::unique_ptr<base::DictionaryValue>
 ElectronMessagingDelegate::MaybeGetTabInfo(content::WebContents* web_contents) {
   if (web_contents) {
-    auto* api_contents = electron::api::WebContents::FromWrappedClass(
-        v8::Isolate::GetCurrent(), web_contents);
+    auto* api_contents = electron::api::WebContents::From(web_contents);
     if (api_contents) {
       auto tab = std::make_unique<base::DictionaryValue>();
       tab->SetWithoutPathExpansion(
           "id", std::make_unique<base::Value>(api_contents->ID()));
+      tab->SetWithoutPathExpansion(
+          "url", std::make_unique<base::Value>(api_contents->GetURL().spec()));
+      tab->SetWithoutPathExpansion(
+          "title", std::make_unique<base::Value>(api_contents->GetTitle()));
+      tab->SetWithoutPathExpansion(
+          "audible",
+          std::make_unique<base::Value>(api_contents->IsCurrentlyAudible()));
       return tab;
     }
   }
@@ -57,8 +62,7 @@ ElectronMessagingDelegate::MaybeGetTabInfo(content::WebContents* web_contents) {
 content::WebContents* ElectronMessagingDelegate::GetWebContentsByTabId(
     content::BrowserContext* browser_context,
     int tab_id) {
-  auto* contents = electron::api::WebContents::FromWeakMapID(
-      v8::Isolate::GetCurrent(), tab_id);
+  auto* contents = electron::api::WebContents::FromID(tab_id);
   if (!contents) {
     return nullptr;
   }

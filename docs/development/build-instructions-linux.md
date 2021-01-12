@@ -25,7 +25,7 @@ Follow the guidelines below for building Electron on Linux.
   Doing so permits installing Node on your own home directory as a standard user.
   Or try repositories such as [NodeSource](https://nodesource.com/blog/nodejs-v012-iojs-and-the-nodesource-linux-repositories).
 * [clang](https://clang.llvm.org/get_started.html) 3.4 or later.
-* Development headers of GTK+ and libnotify.
+* Development headers of GTK 3 and libnotify.
 
 On Ubuntu, install the following libraries:
 
@@ -53,6 +53,15 @@ $ sudo dnf install clang dbus-devel gtk3-devel libnotify-devel \
                    libgnome-keyring-devel xorg-x11-server-utils libcap-devel \
                    cups-devel libXtst-devel alsa-lib-devel libXrandr-devel \
                    nss-devel python-dbusmock openjdk-8-jre
+```
+
+On Arch Linux / Manjaro, install the following libraries:
+
+```sh
+$ sudo pacman -Syu base-devel clang libdbus gtk2 libnotify \
+                   libgnome-keyring alsa-lib libcap libcups libxtst \
+                   libxss nss gcc-multilib curl gperf bison \
+                   python2 python-dbusmock jdk8-openjdk
 ```
 
 Other distributions may offer similar packages for installation via package

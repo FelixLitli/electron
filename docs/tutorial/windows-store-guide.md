@@ -64,8 +64,7 @@ The output should look roughly like this:
 │   ├── [...]
 ├── node.dll
 ├── resources
-│   ├── app
-│   └── atom.asar
+│   └── app.asar
 ├── v8_context_snapshot.bin
 ├── squirrel.exe
 └── ui_resources_200_percent.pak
@@ -115,6 +114,7 @@ Another important limitation is that the compiled AppX package still contains a
 win32 executable - and will therefore not run on Xbox, HoloLens, or Phones.
 
 ## Optional: Add UWP Features using a BackgroundTask
+
 You can pair your Electron app up with an invisible UWP background task that
 gets to make full use of Windows 10 features - like push notifications,
 Cortana integration, or live tiles.

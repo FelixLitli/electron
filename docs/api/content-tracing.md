@@ -16,7 +16,7 @@ const { app, contentTracing } = require('electron')
 app.whenReady().then(() => {
   (async () => {
     await contentTracing.startRecording({
-      include_categories: ['*']
+      included_categories: ['*']
     })
     console.log('Tracing started')
     await new Promise(resolve => setTimeout(resolve, 5000))
@@ -83,4 +83,4 @@ Returns `Promise<Object>` - Resolves with an object containing the `value` and `
 Get the maximum usage across processes of trace buffer as a percentage of the
 full state.
 
-[trace viewer]: https://github.com/catapult-project/catapult/blob/master/tracing
+[trace viewer]: https://chromium.googlesource.com/catapult/+/HEAD/tracing/README.md

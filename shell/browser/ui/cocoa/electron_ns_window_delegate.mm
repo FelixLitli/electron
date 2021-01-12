@@ -97,6 +97,21 @@ using TitleBarStyle = electron::NativeWindowMac::TitleBarStyle;
   shell_->NotifyWindowBlur();
 }
 
+- (void)windowDidBecomeKey:(NSNotification*)notification {
+  shell_->NotifyWindowIsKeyChanged(true);
+}
+
+- (void)windowDidResignKey:(NSNotification*)notification {
+  // If our app is still active and we're still the key window, ignore this
+  // message, since it just means that a menu extra (on the "system status bar")
+  // was activated; we'll get another |-windowDidResignKey| if we ever really
+  // lose key window status.
+  if ([NSApp isActive] && ([NSApp keyWindow] == [notification object]))
+    return;
+
+  shell_->NotifyWindowIsKeyChanged(false);
+}
+
 - (NSSize)windowWillResize:(NSWindow*)sender toSize:(NSSize)frameSize {
   NSSize newSize = frameSize;
   double aspectRatio = shell_->GetAspectRatio();
@@ -136,8 +151,8 @@ using TitleBarStyle = electron::NativeWindowMac::TitleBarStyle;
 - (void)windowDidResize:(NSNotification*)notification {
   [super windowDidResize:notification];
   shell_->NotifyWindowResize();
-  if (shell_->title_bar_style() == TitleBarStyle::HIDDEN) {
-    shell_->RepositionTrafficLights();
+  if (shell_->title_bar_style() == TitleBarStyle::kHidden) {
+    shell_->RedrawTrafficLights();
   }
 }
 
@@ -186,6 +201,7 @@ using TitleBarStyle = electron::NativeWindowMac::TitleBarStyle;
 }
 
 - (void)windowDidEndLiveResize:(NSNotification*)notification {
+  shell_->NotifyWindowResized();
   if (is_zooming_) {
     if (shell_->IsMaximized())
       shell_->NotifyWindowMaximize();
@@ -201,7 +217,7 @@ using TitleBarStyle = electron::NativeWindowMac::TitleBarStyle;
   shell_->SetResizable(true);
   // Hide the native toolbar before entering fullscreen, so there is no visual
   // artifacts.
-  if (shell_->title_bar_style() == TitleBarStyle::HIDDEN_INSET) {
+  if (shell_->title_bar_style() == TitleBarStyle::kHiddenInset) {
     NSWindow* window = shell_->GetNativeWindow().GetNativeNSWindow();
     [window setToolbar:nil];
   }
@@ -218,14 +234,14 @@ using TitleBarStyle = electron::NativeWindowMac::TitleBarStyle;
       // FIXME(zcbenz): Showing titlebar for hiddenInset window is weird under
       // fullscreen mode.
       // Show title if fullscreen_window_title flag is set
-      (shell_->title_bar_style() != TitleBarStyle::HIDDEN_INSET ||
+      (shell_->title_bar_style() != TitleBarStyle::kHiddenInset ||
        shell_->fullscreen_window_title())) {
     [window setTitleVisibility:NSWindowTitleVisible];
   }
 
   // Restore the native toolbar immediately after entering fullscreen, if we
   // do this before leaving fullscreen, traffic light buttons will be jumping.
-  if (shell_->title_bar_style() == TitleBarStyle::HIDDEN_INSET) {
+  if (shell_->title_bar_style() == TitleBarStyle::kHiddenInset) {
     base::scoped_nsobject<NSToolbar> toolbar(
         [[NSToolbar alloc] initWithIdentifier:@"titlebarStylingToolbar"]);
     [toolbar setShowsBaselineSeparator:NO];
@@ -242,19 +258,19 @@ using TitleBarStyle = electron::NativeWindowMac::TitleBarStyle;
   // Restore the titlebar visibility.
   NSWindow* window = shell_->GetNativeWindow().GetNativeNSWindow();
   if ((shell_->transparent() || !shell_->has_frame()) &&
-      (shell_->title_bar_style() != TitleBarStyle::HIDDEN_INSET ||
+      (shell_->title_bar_style() != TitleBarStyle::kHiddenInset ||
        shell_->fullscreen_window_title())) {
     [window setTitleVisibility:NSWindowTitleHidden];
   }
 
   // Turn off the style for toolbar.
-  if (shell_->title_bar_style() == TitleBarStyle::HIDDEN_INSET) {
+  if (shell_->title_bar_style() == TitleBarStyle::kHiddenInset) {
     shell_->SetStyleMask(false, NSWindowStyleMaskFullSizeContentView);
     [window setTitlebarAppearsTransparent:YES];
   }
   shell_->SetExitingFullScreen(true);
-  if (shell_->title_bar_style() == TitleBarStyle::HIDDEN) {
-    shell_->RepositionTrafficLights();
+  if (shell_->title_bar_style() == TitleBarStyle::kHidden) {
+    shell_->RedrawTrafficLights();
   }
 }
 
@@ -262,13 +278,27 @@ using TitleBarStyle = electron::NativeWindowMac::TitleBarStyle;
   shell_->SetResizable(is_resizable_);
   shell_->NotifyWindowLeaveFullScreen();
   shell_->SetExitingFullScreen(false);
-  if (shell_->title_bar_style() == TitleBarStyle::HIDDEN) {
-    shell_->RepositionTrafficLights();
+  if (shell_->title_bar_style() == TitleBarStyle::kHidden) {
+    shell_->RedrawTrafficLights();
   }
 }
 
 - (void)windowWillClose:(NSNotification*)notification {
+  shell_->Cleanup();
   shell_->NotifyWindowClosed();
+
+  // Something called -[NSWindow close] on a sheet rather than calling
+  // -[NSWindow endSheet:] on its parent. If the modal session is not ended
+  // then the parent will never be able to show another sheet. But calling
+  // -endSheet: here will block the thread with an animation, so post a task.
+  if (shell_->is_modal() && shell_->parent() && shell_->IsVisible()) {
+    NSWindow* window = shell_->GetNativeWindow().GetNativeNSWindow();
+    NSWindow* sheetParent = [window sheetParent];
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE, base::BindOnce(base::RetainBlock(^{
+          [sheetParent endSheet:window];
+        })));
+  }
 
   // Clears the delegate when window is going to be closed, since EL Capitan it
   // is possible that the methods of delegate would get called after the window

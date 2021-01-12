@@ -21,7 +21,7 @@ MenuViews::MenuViews(gin::Arguments* args) : Menu(args), weak_factory_(this) {}
 
 MenuViews::~MenuViews() = default;
 
-void MenuViews::PopupAt(TopLevelWindow* window,
+void MenuViews::PopupAt(BaseWindow* window,
                         int x,
                         int y,
                         int positioning_item,
@@ -84,8 +84,11 @@ void MenuViews::OnClosed(int32_t window_id, base::OnceClosure callback) {
 }
 
 // static
-gin_helper::WrappableBase* Menu::New(gin::Arguments* args) {
-  return new MenuViews(args);
+gin::Handle<Menu> Menu::New(gin::Arguments* args) {
+  auto handle = gin::CreateHandle(args->isolate(),
+                                  static_cast<Menu*>(new MenuViews(args)));
+  gin_helper::CallMethod(args->isolate(), handle.get(), "_init");
+  return handle;
 }
 
 }  // namespace api

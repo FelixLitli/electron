@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Deepak Mohan <hop2deep@gmail.com>
+Date: Fri, 28 Feb 2020 15:08:26 -0800
+Subject: gpu: notify when dxdiag request for gpu info fails
+
+We rely on the signal OnGpuInfoUpdate to process gpu info.
+When Electron wants to collect the complete info in a single run
+it checks for the presence of dx_diagnostics attribute, as these
+are the only async calls that happens in the gpu process, but
+there are times when this call can fail due to crash or software
+rendering and there is no signal from browser process on this event
+to identify it.
+
+diff --git a/content/browser/gpu/gpu_data_manager_impl.cc b/content/browser/gpu/gpu_data_manager_impl.cc
+index 3b9289d822f747876c5f71ee23bae4e27800a4ab..5715b785ef8e24c902f8e58a98d28bd74cf9a8ee 100644
+--- a/content/browser/gpu/gpu_data_manager_impl.cc
++++ b/content/browser/gpu/gpu_data_manager_impl.cc
+@@ -229,6 +229,11 @@ void GpuDataManagerImpl::TerminateInfoCollectionGpuProcess() {
+   base::AutoLock auto_lock(lock_);
+   private_->TerminateInfoCollectionGpuProcess();
+ }
++
++bool GpuDataManagerImpl::DxdiagDx12VulkanRequested() const {
++  base::AutoLock auto_lock(lock_);
++  return private_->DxdiagDx12VulkanRequested();
++}
+ #endif
+ 
+ void GpuDataManagerImpl::UpdateGpuFeatureInfo(
+diff --git a/content/browser/gpu/gpu_data_manager_impl.h b/content/browser/gpu/gpu_data_manager_impl.h
+index e57176b02c899d702fac00b7b60cfb1acb14bf26..1b89297e3c5e87b0212e4a487c6850722da77f8f 100644
+--- a/content/browser/gpu/gpu_data_manager_impl.h
++++ b/content/browser/gpu/gpu_data_manager_impl.h
+@@ -97,6 +97,7 @@ class CONTENT_EXPORT GpuDataManagerImpl : public GpuDataManager,
+   // Called from BrowserMainLoop::BrowserThreadsStarted().
+   void OnBrowserThreadsStarted();
+   void TerminateInfoCollectionGpuProcess();
++  bool DxdiagDx12VulkanRequested() const;
+ #endif
+   // Update the GPU feature info. This updates the blocklist and enabled status
+   // of GPU rasterization. In the future this will be used for more features.
+diff --git a/content/browser/gpu/gpu_data_manager_impl_private.cc b/content/browser/gpu/gpu_data_manager_impl_private.cc
+index 9086292908352e6e81fef7fa05b139cdb66c662b..ae2f8717bc482308727b8fa7ff12af325b2db3de 100644
+--- a/content/browser/gpu/gpu_data_manager_impl_private.cc
++++ b/content/browser/gpu/gpu_data_manager_impl_private.cc
+@@ -1032,6 +1032,11 @@ void GpuDataManagerImplPrivate::TerminateInfoCollectionGpuProcess() {
+     host->ForceShutdown();
+ }
+ 
++bool GpuDataManagerImplPrivate::DxdiagDx12VulkanRequested() const {
++  return !(gpu_info_vulkan_request_failed_ ||
++           gpu_info_dx12_request_failed_ ||
++           gpu_info_dx_diag_request_failed_);
++}
+ #endif
+ 
+ void GpuDataManagerImplPrivate::UpdateGpuFeatureInfo(
+diff --git a/content/browser/gpu/gpu_data_manager_impl_private.h b/content/browser/gpu/gpu_data_manager_impl_private.h
+index a91832f439045fe91b426bfbeebeaa36914421cd..f2716eae69b1d2c0efaf70cc22eb4e739c033e7f 100644
+--- a/content/browser/gpu/gpu_data_manager_impl_private.h
++++ b/content/browser/gpu/gpu_data_manager_impl_private.h
+@@ -75,6 +75,7 @@ class CONTENT_EXPORT GpuDataManagerImplPrivate {
+   bool VulkanRequested() const;
+   void OnBrowserThreadsStarted();
+   void TerminateInfoCollectionGpuProcess();
++  bool DxdiagDx12VulkanRequested() const;
+ #endif
+   void UpdateGpuFeatureInfo(const gpu::GpuFeatureInfo& gpu_feature_info,
+                             const base::Optional<gpu::GpuFeatureInfo>&

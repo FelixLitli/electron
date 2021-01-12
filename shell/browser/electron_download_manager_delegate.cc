@@ -20,6 +20,7 @@
 #include "net/base/filename_util.h"
 #include "shell/browser/api/electron_api_download_item.h"
 #include "shell/browser/electron_browser_context.h"
+#include "shell/browser/javascript_environment.h"
 #include "shell/browser/native_window.h"
 #include "shell/browser/ui/file_dialog.h"
 #include "shell/browser/web_contents_preferences.h"
@@ -65,11 +66,7 @@ ElectronDownloadManagerDelegate::~ElectronDownloadManagerDelegate() {
 void ElectronDownloadManagerDelegate::GetItemSavePath(
     download::DownloadItem* item,
     base::FilePath* path) {
-  v8::Isolate* isolate = v8::Isolate::GetCurrent();
-  v8::Locker locker(isolate);
-  v8::HandleScope handle_scope(isolate);
-  api::DownloadItem* download =
-      api::DownloadItem::FromWrappedClass(isolate, item);
+  api::DownloadItem* download = api::DownloadItem::FromDownloadItem(item);
   if (download)
     *path = download->GetSavePath();
 }
@@ -77,11 +74,7 @@ void ElectronDownloadManagerDelegate::GetItemSavePath(
 void ElectronDownloadManagerDelegate::GetItemSaveDialogOptions(
     download::DownloadItem* item,
     file_dialog::DialogSettings* options) {
-  v8::Isolate* isolate = v8::Isolate::GetCurrent();
-  v8::Locker locker(isolate);
-  v8::HandleScope handle_scope(isolate);
-  api::DownloadItem* download =
-      api::DownloadItem::FromWrappedClass(isolate, item);
+  api::DownloadItem* download = api::DownloadItem::FromDownloadItem(item);
   if (download)
     *options = download->GetSaveDialogOptions();
 }
@@ -114,7 +107,7 @@ void ElectronDownloadManagerDelegate::OnDownloadPathGenerated(
 
     if (!settings.parent_window)
       settings.parent_window = window;
-    if (settings.title.size() == 0)
+    if (settings.title.empty())
       settings.title = item->GetURL().spec();
     if (settings.default_path.empty())
       settings.default_path = default_path;
@@ -124,7 +117,8 @@ void ElectronDownloadManagerDelegate::OnDownloadPathGenerated(
         !web_preferences || web_preferences->IsEnabled(options::kOffscreen);
     settings.force_detached = offscreen;
 
-    v8::Isolate* isolate = v8::Isolate::GetCurrent();
+    v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+    v8::HandleScope scope(isolate);
     gin_helper::Promise<gin_helper::Dictionary> dialog_promise(isolate);
     auto dialog_callback = base::BindOnce(
         &ElectronDownloadManagerDelegate::OnDownloadSaveDialogDone,
@@ -136,7 +130,7 @@ void ElectronDownloadManagerDelegate::OnDownloadPathGenerated(
     std::move(callback).Run(path,
                             download::DownloadItem::TARGET_DISPOSITION_PROMPT,
                             download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
-                            item->GetMixedContentStatus(), path,
+                            item->GetMixedContentStatus(), path, base::nullopt,
                             download::DOWNLOAD_INTERRUPT_REASON_NONE);
   }
 }
@@ -159,19 +153,14 @@ void ElectronDownloadManagerDelegate::OnDownloadSaveDialogDone(
   if (!canceled) {
     if (result.Get("filePath", &path)) {
       // Remember the last selected download directory.
-      ElectronBrowserContext* browser_context =
-          static_cast<ElectronBrowserContext*>(
-              download_manager_->GetBrowserContext());
+      auto* browser_context = static_cast<ElectronBrowserContext*>(
+          download_manager_->GetBrowserContext());
       browser_context->prefs()->SetFilePath(prefs::kDownloadDefaultDirectory,
                                             path.DirName());
 
-      v8::Isolate* isolate = v8::Isolate::GetCurrent();
-      v8::Locker locker(isolate);
-      v8::HandleScope handle_scope(isolate);
-      api::DownloadItem* download_item =
-          api::DownloadItem::FromWrappedClass(isolate, item);
-      if (download_item)
-        download_item->SetSavePath(path);
+      api::DownloadItem* download = api::DownloadItem::FromDownloadItem(item);
+      if (download)
+        download->SetSavePath(path);
     }
   }
 
@@ -184,7 +173,8 @@ void ElectronDownloadManagerDelegate::OnDownloadSaveDialogDone(
   std::move(download_callback)
       .Run(path, download::DownloadItem::TARGET_DISPOSITION_PROMPT,
            download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
-           item->GetMixedContentStatus(), path, interrupt_reason);
+           item->GetMixedContentStatus(), path, base::nullopt,
+           interrupt_reason);
 }
 
 void ElectronDownloadManagerDelegate::Shutdown() {
@@ -203,7 +193,7 @@ bool ElectronDownloadManagerDelegate::DetermineDownloadTarget(
         download::DownloadItem::TARGET_DISPOSITION_OVERWRITE,
         download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
         download::DownloadItem::MixedContentStatus::UNKNOWN,
-        download->GetForcedFilePath(),
+        download->GetForcedFilePath(), base::nullopt,
         download::DOWNLOAD_INTERRUPT_REASON_NONE);
     return true;
   }
@@ -216,19 +206,18 @@ bool ElectronDownloadManagerDelegate::DetermineDownloadTarget(
         save_path, download::DownloadItem::TARGET_DISPOSITION_OVERWRITE,
         download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
         download::DownloadItem::MixedContentStatus::UNKNOWN, save_path,
-        download::DOWNLOAD_INTERRUPT_REASON_NONE);
+        base::nullopt, download::DOWNLOAD_INTERRUPT_REASON_NONE);
     return true;
   }
 
-  ElectronBrowserContext* browser_context =
-      static_cast<ElectronBrowserContext*>(
-          download_manager_->GetBrowserContext());
+  auto* browser_context = static_cast<ElectronBrowserContext*>(
+      download_manager_->GetBrowserContext());
   base::FilePath default_download_path =
       browser_context->prefs()->GetFilePath(prefs::kDownloadDefaultDirectory);
 
-  base::PostTaskAndReplyWithResult(
+  base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE,
-      {base::ThreadPool(), base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+      {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
        base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
       base::BindOnce(&CreateDownloadPath, download->GetURL(),
                      download->GetContentDisposition(),

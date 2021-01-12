@@ -6,6 +6,7 @@
 
 #include "base/guid.h"
 #include "base/strings/utf_string_conversions.h"
+#include "gin/handle.h"
 #include "shell/browser/api/electron_api_menu.h"
 #include "shell/browser/browser.h"
 #include "shell/browser/electron_browser_client.h"
@@ -48,9 +49,9 @@ namespace electron {
 
 namespace api {
 
-Notification::Notification(gin::Arguments* args) {
-  InitWithArgs(args);
+gin::WrapperInfo Notification::kWrapperInfo = {gin::kEmbedderNativeGin};
 
+Notification::Notification(gin::Arguments* args) {
   presenter_ = static_cast<ElectronBrowserClient*>(ElectronBrowserClient::Get())
                    ->GetNotificationPresenter();
 
@@ -71,6 +72,7 @@ Notification::Notification(gin::Arguments* args) {
     opts.Get("actions", &actions_);
     opts.Get("sound", &sound_);
     opts.Get("closeButtonText", &close_button_text_);
+    opts.Get("toastXml", &toast_xml_);
   }
 }
 
@@ -80,13 +82,13 @@ Notification::~Notification() {
 }
 
 // static
-gin_helper::WrappableBase* Notification::New(gin_helper::ErrorThrower thrower,
-                                             gin::Arguments* args) {
+gin::Handle<Notification> Notification::New(gin_helper::ErrorThrower thrower,
+                                            gin::Arguments* args) {
   if (!Browser::Get()->is_ready()) {
     thrower.ThrowError("Cannot create Notification before app is ready");
-    return nullptr;
+    return gin::Handle<Notification>();
   }
-  return new Notification(args);
+  return gin::CreateHandle(thrower.isolate(), new Notification(args));
 }
 
 // Getters
@@ -132,6 +134,10 @@ std::vector<electron::NotificationAction> Notification::GetActions() const {
 
 base::string16 Notification::GetCloseButtonText() const {
   return close_button_text_;
+}
+
+base::string16 Notification::GetToastXml() const {
+  return toast_xml_;
 }
 
 // Setters
@@ -180,6 +186,10 @@ void Notification::SetCloseButtonText(const base::string16& text) {
   close_button_text_ = text;
 }
 
+void Notification::SetToastXml(const base::string16& new_toast_xml) {
+  toast_xml_ = new_toast_xml;
+}
+
 void Notification::NotificationAction(int index) {
   Emit("action", index);
 }
@@ -194,6 +204,10 @@ void Notification::NotificationReplied(const std::string& reply) {
 
 void Notification::NotificationDisplayed() {
   Emit("show");
+}
+
+void Notification::NotificationFailed(const std::string& error) {
+  Emit("failed", error);
 }
 
 void Notification::NotificationDestroyed() {}
@@ -230,6 +244,7 @@ void Notification::Show() {
       options.sound = sound_;
       options.close_button_text = close_button_text_;
       options.urgency = urgency_;
+      options.toast_xml = toast_xml_;
       notification_->Show(options);
     }
   }
@@ -240,12 +255,10 @@ bool Notification::IsSupported() {
                ->GetNotificationPresenter();
 }
 
-// static
-void Notification::BuildPrototype(v8::Isolate* isolate,
-                                  v8::Local<v8::FunctionTemplate> prototype) {
-  prototype->SetClassName(gin::StringToV8(isolate, "Notification"));
-  gin_helper::Destroyable::MakeDestroyable(isolate, prototype);
-  gin_helper::ObjectTemplateBuilder(isolate, prototype->PrototypeTemplate())
+v8::Local<v8::ObjectTemplate> Notification::FillObjectTemplate(
+    v8::Isolate* isolate,
+    v8::Local<v8::ObjectTemplate> templ) {
+  return gin::ObjectTemplateBuilder(isolate, "Notification", templ)
       .SetMethod("show", &Notification::Show)
       .SetMethod("close", &Notification::Close)
       .SetProperty("title", &Notification::GetTitle, &Notification::SetTitle)
@@ -265,7 +278,10 @@ void Notification::BuildPrototype(v8::Isolate* isolate,
       .SetProperty("actions", &Notification::GetActions,
                    &Notification::SetActions)
       .SetProperty("closeButtonText", &Notification::GetCloseButtonText,
-                   &Notification::SetCloseButtonText);
+                   &Notification::SetCloseButtonText)
+      .SetProperty("toastXml", &Notification::GetToastXml,
+                   &Notification::SetToastXml)
+      .Build();
 }
 
 }  // namespace api
@@ -281,17 +297,11 @@ void Initialize(v8::Local<v8::Object> exports,
                 v8::Local<v8::Context> context,
                 void* priv) {
   v8::Isolate* isolate = context->GetIsolate();
-  Notification::SetConstructor(isolate,
-                               base::BindRepeating(&Notification::New));
-
   gin_helper::Dictionary dict(isolate, exports);
-  dict.Set("Notification", Notification::GetConstructor(isolate)
-                               ->GetFunction(context)
-                               .ToLocalChecked());
-
+  dict.Set("Notification", Notification::GetConstructor(context));
   dict.SetMethod("isSupported", &Notification::IsSupported);
 }
 
 }  // namespace
 
-NODE_LINKED_MODULE_CONTEXT_AWARE(atom_common_notification, Initialize)
+NODE_LINKED_MODULE_CONTEXT_AWARE(electron_common_notification, Initialize)

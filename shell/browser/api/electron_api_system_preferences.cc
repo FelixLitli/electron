@@ -7,7 +7,7 @@
 #include "shell/common/gin_converters/callback_converter.h"
 #include "shell/common/gin_converters/value_converter.h"
 #include "shell/common/gin_helper/dictionary.h"
-#include "shell/common/gin_helper/object_template_builder.h"
+#include "shell/common/gin_helper/function_template_extensions.h"
 #include "shell/common/node_includes.h"
 #include "ui/gfx/animation/animation.h"
 #include "ui/gfx/color_utils.h"
@@ -17,8 +17,9 @@ namespace electron {
 
 namespace api {
 
-SystemPreferences::SystemPreferences(v8::Isolate* isolate) {
-  Init(isolate);
+gin::WrapperInfo SystemPreferences::kWrapperInfo = {gin::kEmbedderNativeGin};
+
+SystemPreferences::SystemPreferences() {
 #if defined(OS_WIN)
   InitializeWindow();
 #endif
@@ -30,14 +31,10 @@ SystemPreferences::~SystemPreferences() {
 #endif
 }
 
-#if !defined(OS_MACOSX)
-bool SystemPreferences::IsDarkMode() {
-  return ui::NativeTheme::GetInstanceForNativeUi()->ShouldUseDarkColors();
-}
-#endif
-
 bool SystemPreferences::IsInvertedColorScheme() {
-  return color_utils::IsInvertedColorScheme();
+  return ui::NativeTheme::GetInstanceForNativeUi()
+             ->GetPlatformHighContrastColorScheme() ==
+         ui::NativeTheme::PlatformHighContrastColorScheme::kDark;
 }
 
 bool SystemPreferences::IsHighContrastColorScheme() {
@@ -59,23 +56,23 @@ v8::Local<v8::Value> SystemPreferences::GetAnimationSettings(
 
 // static
 gin::Handle<SystemPreferences> SystemPreferences::Create(v8::Isolate* isolate) {
-  return gin::CreateHandle(isolate, new SystemPreferences(isolate));
+  return gin::CreateHandle(isolate, new SystemPreferences());
 }
 
-// static
-void SystemPreferences::BuildPrototype(
-    v8::Isolate* isolate,
-    v8::Local<v8::FunctionTemplate> prototype) {
-  prototype->SetClassName(gin::StringToV8(isolate, "SystemPreferences"));
-  gin_helper::ObjectTemplateBuilder(isolate, prototype->PrototypeTemplate())
-#if defined(OS_WIN) || defined(OS_MACOSX)
+gin::ObjectTemplateBuilder SystemPreferences::GetObjectTemplateBuilder(
+    v8::Isolate* isolate) {
+  return gin_helper::EventEmitterMixin<
+             SystemPreferences>::GetObjectTemplateBuilder(isolate)
+#if defined(OS_WIN) || defined(OS_MAC)
       .SetMethod("getColor", &SystemPreferences::GetColor)
       .SetMethod("getAccentColor", &SystemPreferences::GetAccentColor)
+      .SetMethod("getMediaAccessStatus",
+                 &SystemPreferences::GetMediaAccessStatus)
 #endif
 
 #if defined(OS_WIN)
       .SetMethod("isAeroGlassEnabled", &SystemPreferences::IsAeroGlassEnabled)
-#elif defined(OS_MACOSX)
+#elif defined(OS_MAC)
       .SetMethod("postNotification", &SystemPreferences::PostNotification)
       .SetMethod("subscribeNotification",
                  &SystemPreferences::SubscribeNotification)
@@ -99,33 +96,25 @@ void SystemPreferences::BuildPrototype(
       .SetMethod("removeUserDefault", &SystemPreferences::RemoveUserDefault)
       .SetMethod("isSwipeTrackingFromScrollEventsEnabled",
                  &SystemPreferences::IsSwipeTrackingFromScrollEventsEnabled)
-      .SetMethod("_getEffectiveAppearance",
+      .SetMethod("getEffectiveAppearance",
                  &SystemPreferences::GetEffectiveAppearance)
-      .SetMethod("_getAppLevelAppearance",
+      .SetMethod("getAppLevelAppearance",
                  &SystemPreferences::GetAppLevelAppearance)
-      .SetMethod("_setAppLevelAppearance",
+      .SetMethod("setAppLevelAppearance",
                  &SystemPreferences::SetAppLevelAppearance)
-      .SetProperty("appLevelAppearance",
-                   &SystemPreferences::GetAppLevelAppearance,
-                   &SystemPreferences::SetAppLevelAppearance)
-      .SetProperty("effectiveAppearance",
-                   &SystemPreferences::GetEffectiveAppearance)
       .SetMethod("getSystemColor", &SystemPreferences::GetSystemColor)
       .SetMethod("canPromptTouchID", &SystemPreferences::CanPromptTouchID)
       .SetMethod("promptTouchID", &SystemPreferences::PromptTouchID)
       .SetMethod("isTrustedAccessibilityClient",
                  &SystemPreferences::IsTrustedAccessibilityClient)
-      .SetMethod("getMediaAccessStatus",
-                 &SystemPreferences::GetMediaAccessStatus)
       .SetMethod("askForMediaAccess", &SystemPreferences::AskForMediaAccess)
 #endif
-      .SetMethod("isInvertedColorScheme",
-                 &SystemPreferences::IsInvertedColorScheme)
-      .SetMethod("isHighContrastColorScheme",
-                 &SystemPreferences::IsHighContrastColorScheme)
-      .SetMethod("isDarkMode", &SystemPreferences::IsDarkMode)
       .SetMethod("getAnimationSettings",
                  &SystemPreferences::GetAnimationSettings);
+}
+
+const char* SystemPreferences::GetTypeName() {
+  return "SystemPreferences";
 }
 
 }  // namespace api
@@ -143,11 +132,9 @@ void Initialize(v8::Local<v8::Object> exports,
   v8::Isolate* isolate = context->GetIsolate();
   gin_helper::Dictionary dict(isolate, exports);
   dict.Set("systemPreferences", SystemPreferences::Create(isolate));
-  dict.Set("SystemPreferences", SystemPreferences::GetConstructor(isolate)
-                                    ->GetFunction(context)
-                                    .ToLocalChecked());
 }
 
 }  // namespace
 
-NODE_LINKED_MODULE_CONTEXT_AWARE(atom_browser_system_preferences, Initialize)
+NODE_LINKED_MODULE_CONTEXT_AWARE(electron_browser_system_preferences,
+                                 Initialize)

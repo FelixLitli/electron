@@ -29,21 +29,26 @@ inline void dispatch_sync_main(dispatch_block_t block) {
 
 }  // namespace
 
-@interface ElectronApplication () <NativeEventProcessor> {
+@interface AtomApplication () <NativeEventProcessor> {
   base::ObserverList<content::NativeEventProcessorObserver>::Unchecked
       observers_;
 }
 @end
 
-@implementation ElectronApplication
+@implementation AtomApplication
 
-+ (ElectronApplication*)sharedApplication {
-  return (ElectronApplication*)[super sharedApplication];
++ (AtomApplication*)sharedApplication {
+  return (AtomApplication*)[super sharedApplication];
+}
+
+- (void)willPowerOff:(NSNotification*)notify {
+  userStoppedShutdown_ = shouldShutdown_ && !shouldShutdown_.Run();
 }
 
 - (void)terminate:(id)sender {
-  if (shouldShutdown_ && !shouldShutdown_.Run())
-    return;  // User will call Quit later.
+  // User will call Quit later.
+  if (userStoppedShutdown_)
+    return;
 
   // We simply try to close the browser, which in turn will try to close the
   // windows. Termination can proceed if all windows are closed or window close
@@ -172,36 +177,22 @@ inline void dispatch_sync_main(dispatch_block_t block) {
   electron::Browser::Get()->OpenURL(base::SysNSStringToUTF8(url));
 }
 
-- (bool)voiceOverEnabled {
-  NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
-  [defaults addSuiteNamed:@"com.apple.universalaccess"];
-  [defaults synchronize];
-
-  return [defaults boolForKey:@"voiceOverOnOffKey"];
-}
-
 - (void)accessibilitySetValue:(id)value forAttribute:(NSString*)attribute {
-  // Undocumented attribute that VoiceOver happens to set while running.
-  // Chromium uses this too, even though it's not exactly right.
-  if ([attribute isEqualToString:@"AXEnhancedUserInterface"]) {
-    bool enableAccessibility = ([self voiceOverEnabled] && [value boolValue]);
-    [self updateAccessibilityEnabled:enableAccessibility];
-  } else if ([attribute isEqualToString:@"AXManualAccessibility"]) {
-    [self updateAccessibilityEnabled:[value boolValue]];
+  // Undocumented attribute that screen reader related functionality
+  // sets when running.
+  if ([attribute isEqualToString:@"AXEnhancedUserInterface"] ||
+      [attribute isEqualToString:@"AXManualAccessibility"]) {
+    auto* ax_state = content::BrowserAccessibilityState::GetInstance();
+    if ([value boolValue]) {
+      ax_state->OnScreenReaderDetected();
+    } else {
+      ax_state->DisableAccessibility();
+    }
+
+    electron::Browser::Get()->OnAccessibilitySupportChanged();
   }
+
   return [super accessibilitySetValue:value forAttribute:attribute];
-}
-
-- (void)updateAccessibilityEnabled:(BOOL)enabled {
-  auto* ax_state = content::BrowserAccessibilityState::GetInstance();
-
-  if (enabled) {
-    ax_state->OnScreenReaderDetected();
-  } else {
-    ax_state->DisableAccessibility();
-  }
-
-  electron::Browser::Get()->OnAccessibilitySupportChanged();
 }
 
 - (void)orderFrontStandardAboutPanel:(id)sender {

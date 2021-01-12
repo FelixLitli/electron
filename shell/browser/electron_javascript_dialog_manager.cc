@@ -27,9 +27,7 @@ constexpr int kUserWantsNoMoreDialogs = -1;
 
 }  // namespace
 
-ElectronJavaScriptDialogManager::ElectronJavaScriptDialogManager(
-    api::WebContents* api_web_contents)
-    : api_web_contents_(api_web_contents) {}
+ElectronJavaScriptDialogManager::ElectronJavaScriptDialogManager() {}
 ElectronJavaScriptDialogManager::~ElectronJavaScriptDialogManager() = default;
 
 void ElectronJavaScriptDialogManager::RunJavaScriptDialog(
@@ -61,6 +59,12 @@ void ElectronJavaScriptDialogManager::RunJavaScriptDialog(
     return;
   }
 
+  auto* web_preferences = WebContentsPreferences::From(web_contents);
+
+  if (web_preferences && web_preferences->IsEnabled("disableDialogs")) {
+    return std::move(callback).Run(false, base::string16());
+  }
+
   // No default button
   int default_id = -1;
   int cancel_id = 0;
@@ -75,7 +79,6 @@ void ElectronJavaScriptDialogManager::RunJavaScriptDialog(
 
   origin_counts_[origin]++;
 
-  auto* web_preferences = WebContentsPreferences::From(web_contents);
   std::string checkbox;
   if (origin_counts_[origin] > 1 && web_preferences &&
       web_preferences->IsEnabled("safeDialogs") &&
@@ -93,6 +96,7 @@ void ElectronJavaScriptDialogManager::RunJavaScriptDialog(
 
   electron::MessageBoxSettings settings;
   settings.parent_window = window;
+  settings.checkbox_label = checkbox;
   settings.buttons = buttons;
   settings.default_id = default_id;
   settings.cancel_id = cancel_id;
@@ -101,8 +105,7 @@ void ElectronJavaScriptDialogManager::RunJavaScriptDialog(
   electron::ShowMessageBox(
       settings,
       base::BindOnce(&ElectronJavaScriptDialogManager::OnMessageBoxCallback,
-                     base::Unretained(this), base::Passed(std::move(callback)),
-                     origin));
+                     base::Unretained(this), std::move(callback), origin));
 }
 
 void ElectronJavaScriptDialogManager::RunBeforeUnloadDialog(
@@ -110,9 +113,11 @@ void ElectronJavaScriptDialogManager::RunBeforeUnloadDialog(
     content::RenderFrameHost* rfh,
     bool is_reload,
     DialogClosedCallback callback) {
-  bool default_prevented = api_web_contents_->Emit("will-prevent-unload");
-  std::move(callback).Run(default_prevented, base::string16());
-  return;
+  auto* api_web_contents = api::WebContents::From(web_contents);
+  if (api_web_contents) {
+    bool default_prevented = api_web_contents->Emit("will-prevent-unload");
+    std::move(callback).Run(default_prevented, base::string16());
+  }
 }
 
 void ElectronJavaScriptDialogManager::CancelDialogs(

@@ -30,7 +30,7 @@ WebWorkerObserver* WebWorkerObserver::GetCurrent() {
 
 WebWorkerObserver::WebWorkerObserver()
     : node_bindings_(
-          NodeBindings::Create(NodeBindings::BrowserEnvironment::WORKER)),
+          NodeBindings::Create(NodeBindings::BrowserEnvironment::kWorker)),
       electron_bindings_(new ElectronBindings(node_bindings_->uv_loop())) {
   lazy_tls.Pointer()->Set(this);
 }
@@ -42,7 +42,8 @@ WebWorkerObserver::~WebWorkerObserver() {
   asar::ClearArchives();
 }
 
-void WebWorkerObserver::ContextCreated(v8::Local<v8::Context> worker_context) {
+void WebWorkerObserver::WorkerScriptReadyForEvaluation(
+    v8::Local<v8::Context> worker_context) {
   v8::Context::Scope context_scope(worker_context);
 
   // Start the embed thread.
@@ -52,7 +53,7 @@ void WebWorkerObserver::ContextCreated(v8::Local<v8::Context> worker_context) {
   bool initialized = node::InitializeContext(worker_context);
   CHECK(initialized);
   node::Environment* env =
-      node_bindings_->CreateEnvironment(worker_context, nullptr, true);
+      node_bindings_->CreateEnvironment(worker_context, nullptr);
 
   // Add Electron extended APIs.
   electron_bindings_->BindTo(env->isolate(), env->process_object());

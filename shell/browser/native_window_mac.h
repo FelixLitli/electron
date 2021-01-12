@@ -14,6 +14,7 @@
 
 #include "base/mac/scoped_nsobject.h"
 #include "shell/browser/native_window.h"
+#include "ui/native_theme/native_theme_observer.h"
 #include "ui/views/controls/native/native_view_host.h"
 
 @class ElectronNSWindow;
@@ -26,7 +27,7 @@ namespace electron {
 
 class RootViewMac;
 
-class NativeWindowMac : public NativeWindow {
+class NativeWindowMac : public NativeWindow, public ui::NativeThemeObserver {
  public:
   NativeWindowMac(const gin_helper::Dictionary& options, NativeWindow* parent);
   ~NativeWindowMac() override;
@@ -62,11 +63,6 @@ class NativeWindowMac : public NativeWindow {
   void MoveTop() override;
   bool IsResizable() override;
   void SetMovable(bool movable) override;
-  void SetAspectRatio(double aspect_ratio,
-                      const gfx::Size& extra_size) override;
-  void PreviewFile(const std::string& path,
-                   const std::string& display_name) override;
-  void CloseFilePreview() override;
   bool IsMovable() override;
   void SetMinimizable(bool minimizable) override;
   bool IsMinimizable() override;
@@ -116,30 +112,37 @@ class NativeWindowMac : public NativeWindow {
   void SetProgressBar(double progress, const ProgressState state) override;
   void SetOverlayIcon(const gfx::Image& overlay,
                       const std::string& description) override;
-
-  void SetVisibleOnAllWorkspaces(bool visible) override;
+  void SetVisibleOnAllWorkspaces(bool visible,
+                                 bool visibleOnFullScreen) override;
   bool IsVisibleOnAllWorkspaces() override;
-
   void SetAutoHideCursor(bool auto_hide) override;
-
+  void SetVibrancy(const std::string& type) override;
+  void SetTrafficLightPosition(base::Optional<gfx::Point> position) override;
+  base::Optional<gfx::Point> GetTrafficLightPosition() const override;
+  void RedrawTrafficLights() override;
+  void SetTouchBar(
+      std::vector<gin_helper::PersistentDictionary> items) override;
+  void RefreshTouchBarItem(const std::string& item_id) override;
+  void SetEscapeTouchBarItem(gin_helper::PersistentDictionary item) override;
   void SelectPreviousTab() override;
   void SelectNextTab() override;
   void MergeAllWindows() override;
   void MoveTabToNewWindow() override;
   void ToggleTabBar() override;
   bool AddTabbedWindow(NativeWindow* window) override;
-
   bool SetWindowButtonVisibility(bool visible) override;
-
-  void SetVibrancy(const std::string& type) override;
-  void SetTouchBar(
-      std::vector<gin_helper::PersistentDictionary> items) override;
-  void RefreshTouchBarItem(const std::string& item_id) override;
-  void SetEscapeTouchBarItem(gin_helper::PersistentDictionary item) override;
-  void SetGTKDarkThemeEnabled(bool use_dark_theme) override {}
-
+  void SetAspectRatio(double aspect_ratio,
+                      const gfx::Size& extra_size) override;
+  void PreviewFile(const std::string& path,
+                   const std::string& display_name) override;
+  void CloseFilePreview() override;
   gfx::Rect ContentBoundsToWindowBounds(const gfx::Rect& bounds) const override;
   gfx::Rect WindowBoundsToContentBounds(const gfx::Rect& bounds) const override;
+
+  // Cleanup observers when window is getting closed. Note that the destructor
+  // can be called much later after window gets closed, so we should not do
+  // cleanup in destructor.
+  void Cleanup();
 
   // Use a custom content view instead of Chromium's BridgedContentView.
   void OverrideNSWindowContentView();
@@ -149,15 +152,19 @@ class NativeWindowMac : public NativeWindow {
   void SetCollectionBehavior(bool on, NSUInteger flag);
   void SetWindowLevel(int level);
 
-  // Custom traffic light positioning
-  void RepositionTrafficLights();
   void SetExitingFullScreen(bool flag);
 
+  enum class VisualEffectState {
+    kFollowWindow,
+    kActive,
+    kInactive,
+  };
+
   enum class TitleBarStyle {
-    NORMAL,
-    HIDDEN,
-    HIDDEN_INSET,
-    CUSTOM_BUTTONS_ON_HOVER,
+    kNormal,
+    kHidden,
+    kHiddenInset,
+    kCustomButtonsOnHover,
   };
   TitleBarStyle title_bar_style() const { return title_bar_style_; }
 
@@ -172,6 +179,9 @@ class NativeWindowMac : public NativeWindow {
   // views::WidgetDelegate:
   bool CanResize() const override;
   views::View* GetContentsView() override;
+
+  // ui::NativeThemeObserver:
+  void OnNativeThemeUpdated(ui::NativeTheme* observed_theme) override;
 
  private:
   // Add custom layers to the content view.
@@ -204,7 +214,7 @@ class NativeWindowMac : public NativeWindow {
   bool fullscreen_window_title_ = false;
   bool resizable_ = true;
   bool exiting_fullscreen_ = false;
-  gfx::Point traffic_light_position_;
+  base::Optional<gfx::Point> traffic_light_position_;
 
   NSInteger attention_request_id_ = 0;  // identifier from requestUserAttention
 
@@ -212,11 +222,17 @@ class NativeWindowMac : public NativeWindow {
   NSApplicationPresentationOptions kiosk_options_;
 
   // The "titleBarStyle" option.
-  TitleBarStyle title_bar_style_ = TitleBarStyle::NORMAL;
+  TitleBarStyle title_bar_style_ = TitleBarStyle::kNormal;
+
+  // The "visualEffectState" option.
+  VisualEffectState visual_effect_state_ = VisualEffectState::kFollowWindow;
 
   // The visibility mode of window button controls when explicitly set through
   // setWindowButtonVisibility().
   base::Optional<bool> window_button_visibility_;
+
+  // Maximizable window state; necessary for persistence through redraws.
+  bool maximizable_ = true;
 
   // Simple (pre-Lion) Fullscreen Settings
   bool always_simple_fullscreen_ = false;

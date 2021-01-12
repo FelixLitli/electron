@@ -42,12 +42,12 @@ improve performance.
 
 To learn more about how to profile your app's code, familiarize yourself with
 the Chrome Developer Tools. For advanced analysis looking at multiple processes
-at once, consider the [Chrome Tracing] tool.
+at once, consider the [Chrome Tracing](https://www.chromium.org/developers/how-tos/trace-event-profiling-tool) tool.
 
 ### Recommended Reading
 
- * [Get Started With Analyzing Runtime Performance][chrome-devtools-tutorial]
- * [Talk: "Visual Studio Code - The First Second"][vscode-first-second]
+* [Get Started With Analyzing Runtime Performance][chrome-devtools-tutorial]
+* [Talk: "Visual Studio Code - The First Second"][vscode-first-second]
 
 ## Checklist
 
@@ -104,7 +104,7 @@ connectivity checks included in later versions of Chromium.
 When considering a module, we recommend that you check:
 
 1. the size of dependencies included
-2) the resources required to load (`require()`) it
+2. the resources required to load (`require()`) it
 3. the resources required to perform the action you're interested in
 
 Generating a CPU profile and a heap memory profile for loading a module can be done
@@ -264,7 +264,6 @@ core Node.js modules (like `fs` or `child_process`) offer a synchronous or an
 asynchronous version, you should prefer the asynchronous and non-blocking
 variant.
 
-
 ## 4) Blocking the renderer process
 
 Since Electron ships with a current version of Chrome, you can make use of the
@@ -300,7 +299,6 @@ some caveats to consider – consult Electron's
 [MDN documentation for Web Workers][web-workers]. They're an ideal solution
 for any operation that requires a lot of CPU power for an extended period of
 time.
-
 
 ## 5) Unnecessary polyfills
 
@@ -340,7 +338,6 @@ If you're using a transpiler/compiler like TypeScript, examine its configuration
 and ensure that you're targeting the latest ECMAScript version supported by
 Electron.
 
-
 ## 6) Unnecessary or blocking network requests
 
 Avoid fetching rarely changing resources from the internet if they could easily
@@ -352,7 +349,7 @@ Many users of Electron start with an entirely web-based app that they're
 turning into a desktop application. As web developers, we are used to loading
 resources from a variety of content delivery networks. Now that you are
 shipping a proper desktop application, attempt to "cut the cord" where possible
- - and avoid letting your users wait for resources that never change and could
+and avoid letting your users wait for resources that never change and could
 easily be included  in your app.
 
 A typical example is Google Fonts. Many developers make use of Google's

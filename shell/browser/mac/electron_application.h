@@ -9,21 +9,25 @@
 #import <AVFoundation/AVFoundation.h>
 #import <LocalAuthentication/LocalAuthentication.h>
 
-@interface ElectronApplication : NSApplication <CrAppProtocol,
-                                                CrAppControlProtocol,
-                                                NSUserActivityDelegate> {
+@interface AtomApplication : NSApplication <CrAppProtocol,
+                                            CrAppControlProtocol,
+                                            NSUserActivityDelegate> {
  @private
   BOOL handlingSendEvent_;
   base::scoped_nsobject<NSUserActivity> currentActivity_;
   NSCondition* handoffLock_;
   BOOL updateReceived_;
+  BOOL userStoppedShutdown_;
   base::Callback<bool()> shouldShutdown_;
 }
 
-+ (ElectronApplication*)sharedApplication;
++ (AtomApplication*)sharedApplication;
 
 - (void)setShutdownHandler:(base::Callback<bool()>)handler;
 - (void)registerURLHandler;
+
+// Called when macOS itself is shutting down.
+- (void)willPowerOff:(NSNotification*)notify;
 
 // CrAppProtocol:
 - (BOOL)isHandlingSendEvent;

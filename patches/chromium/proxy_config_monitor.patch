@@ -6,11 +6,11 @@ Subject: proxy_config_monitor.patch
 Allow monitoring proxy config changes for a pref service.
 
 diff --git a/chrome/browser/net/proxy_config_monitor.cc b/chrome/browser/net/proxy_config_monitor.cc
-index 342db7adee575cc49a38bbdfcf1bbfcc0e30cf57..fc8e6b49d96534546dfa97846c2be79cff8a96e5 100644
+index 08a7a0260f6a2e3053e6da39b394eb90fa132bf9..fbee7cabb1865c337290d30675a106110369b3b4 100644
 --- a/chrome/browser/net/proxy_config_monitor.cc
 +++ b/chrome/browser/net/proxy_config_monitor.cc
-@@ -10,7 +10,9 @@
- #include "build/build_config.h"
+@@ -11,7 +11,9 @@
+ #include "build/chromeos_buildflags.h"
  #include "chrome/browser/browser_process.h"
  #include "chrome/browser/net/proxy_service_factory.h"
 +#if 0
@@ -18,10 +18,10 @@ index 342db7adee575cc49a38bbdfcf1bbfcc0e30cf57..fc8e6b49d96534546dfa97846c2be79c
 +#endif
  #include "components/proxy_config/pref_proxy_config_tracker_impl.h"
  #include "content/public/browser/browser_thread.h"
- #include "mojo/public/cpp/bindings/associated_interface_ptr.h"
+ #include "mojo/public/cpp/bindings/pending_remote.h"
 @@ -21,12 +23,13 @@
  #include "chrome/browser/chromeos/profiles/profile_helper.h"
- #endif  // defined(OS_CHROMEOS)
+ #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
  
 -#if BUILDFLAG(ENABLE_EXTENSIONS)
 +#if 0

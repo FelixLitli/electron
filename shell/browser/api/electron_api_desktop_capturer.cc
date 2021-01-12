@@ -14,10 +14,12 @@
 #include "chrome/browser/media/webrtc/desktop_media_list.h"
 #include "chrome/browser/media/webrtc/window_icon_util.h"
 #include "content/public/browser/desktop_capture.h"
+#include "gin/object_template_builder.h"
+#include "shell/browser/javascript_environment.h"
 #include "shell/common/api/electron_api_native_image.h"
 #include "shell/common/gin_converters/gfx_converter.h"
 #include "shell/common/gin_helper/dictionary.h"
-#include "shell/common/gin_helper/object_template_builder.h"
+#include "shell/common/gin_helper/event_emitter_caller.h"
 #include "shell/common/node_includes.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capture_options.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capturer.h"
@@ -48,6 +50,8 @@ struct Converter<electron::api::DesktopCapturer::Source> {
           "appIcon",
           electron::api::NativeImage::Create(
               isolate, gfx::Image(GetWindowIcon(source.media_list_source.id))));
+    } else {
+      dict.Set("appIcon", nullptr);
     }
     return ConvertToV8(isolate, dict);
   }
@@ -59,9 +63,9 @@ namespace electron {
 
 namespace api {
 
-DesktopCapturer::DesktopCapturer(v8::Isolate* isolate) {
-  Init(isolate);
-}
+gin::WrapperInfo DesktopCapturer::kWrapperInfo = {gin::kEmbedderNativeGin};
+
+DesktopCapturer::DesktopCapturer(v8::Isolate* isolate) {}
 
 DesktopCapturer::~DesktopCapturer() = default;
 
@@ -154,7 +158,10 @@ void DesktopCapturer::UpdateSourcesList(DesktopMediaList* list) {
       // |media_list_sources|.
       if (!webrtc::DxgiDuplicatorController::Instance()->GetDeviceNames(
               &device_names)) {
-        Emit("error", "Failed to get sources.");
+        v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+        v8::Locker locker(isolate);
+        v8::HandleScope scope(isolate);
+        gin_helper::CallMethod(this, "_onerror", "Failed to get sources.");
         return;
       }
 
@@ -170,7 +177,7 @@ void DesktopCapturer::UpdateSourcesList(DesktopMediaList* list) {
         source.display_id = base::NumberToString(device_id);
       }
     }
-#elif defined(OS_MACOSX)
+#elif defined(OS_MAC)
     // On Mac, the IDs across the APIs match.
     for (auto& source : screen_sources) {
       source.display_id = base::NumberToString(source.media_list_source.id.id);
@@ -183,8 +190,12 @@ void DesktopCapturer::UpdateSourcesList(DesktopMediaList* list) {
               std::back_inserter(captured_sources_));
   }
 
-  if (!capture_window_ && !capture_screen_)
-    Emit("finished", captured_sources_, fetch_window_icons_);
+  if (!capture_window_ && !capture_screen_) {
+    v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+    v8::Locker locker(isolate);
+    v8::HandleScope scope(isolate);
+    gin_helper::CallMethod(this, "_onfinished", captured_sources_);
+  }
 }
 
 // static
@@ -192,13 +203,14 @@ gin::Handle<DesktopCapturer> DesktopCapturer::Create(v8::Isolate* isolate) {
   return gin::CreateHandle(isolate, new DesktopCapturer(isolate));
 }
 
-// static
-void DesktopCapturer::BuildPrototype(
-    v8::Isolate* isolate,
-    v8::Local<v8::FunctionTemplate> prototype) {
-  prototype->SetClassName(gin::StringToV8(isolate, "DesktopCapturer"));
-  gin_helper::ObjectTemplateBuilder(isolate, prototype->PrototypeTemplate())
+gin::ObjectTemplateBuilder DesktopCapturer::GetObjectTemplateBuilder(
+    v8::Isolate* isolate) {
+  return gin::Wrappable<DesktopCapturer>::GetObjectTemplateBuilder(isolate)
       .SetMethod("startHandling", &DesktopCapturer::StartHandling);
+}
+
+const char* DesktopCapturer::GetTypeName() {
+  return "DesktopCapturer";
 }
 
 }  // namespace api
@@ -218,4 +230,4 @@ void Initialize(v8::Local<v8::Object> exports,
 
 }  // namespace
 
-NODE_LINKED_MODULE_CONTEXT_AWARE(atom_browser_desktop_capturer, Initialize)
+NODE_LINKED_MODULE_CONTEXT_AWARE(electron_browser_desktop_capturer, Initialize)

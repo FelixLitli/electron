@@ -6,9 +6,10 @@
 
 #include "base/path_service.h"
 #include "shell/browser/api/electron_api_app.h"
-#include "shell/browser/electron_paths.h"
+#include "shell/common/electron_paths.h"
 
 #import <Cocoa/Cocoa.h>
+#import <sys/sysctl.h>
 
 namespace electron {
 
@@ -21,7 +22,10 @@ void App::SetAppLogsPath(gin_helper::ErrorThrower thrower,
       thrower.ThrowError("Path must be absolute");
       return;
     }
-    base::PathService::Override(DIR_APP_LOGS, custom_path.value());
+    {
+      base::ThreadRestrictions::ScopedAllowIO allow_io;
+      base::PathService::Override(DIR_APP_LOGS, custom_path.value());
+    }
   } else {
     NSString* bundle_name =
         [[[NSBundle mainBundle] infoDictionary] objectForKey:@"CFBundleName"];
@@ -29,8 +33,11 @@ void App::SetAppLogsPath(gin_helper::ErrorThrower thrower,
         [NSString stringWithFormat:@"Library/Logs/%@", bundle_name];
     NSString* library_path =
         [NSHomeDirectory() stringByAppendingPathComponent:logs_path];
-    base::PathService::Override(DIR_APP_LOGS,
-                                base::FilePath([library_path UTF8String]));
+    {
+      base::ThreadRestrictions::ScopedAllowIO allow_io;
+      base::PathService::Override(DIR_APP_LOGS,
+                                  base::FilePath([library_path UTF8String]));
+    }
   }
 }
 
@@ -50,6 +57,16 @@ void App::SetActivationPolicy(gin_helper::ErrorThrower thrower,
   }
 
   [NSApp setActivationPolicy:activation_policy];
+}
+
+bool App::IsRunningUnderRosettaTranslation() const {
+  int proc_translated = 0;
+  size_t size = sizeof(proc_translated);
+  if (sysctlbyname("sysctl.proc_translated", &proc_translated, &size, NULL,
+                   0) == -1) {
+    return false;
+  }
+  return proc_translated == 1;
 }
 
 }  // namespace api

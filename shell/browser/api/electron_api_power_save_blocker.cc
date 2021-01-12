@@ -6,7 +6,7 @@
 
 #include <string>
 
-#include "base/bind_helpers.h"
+#include "base/callback_helpers.h"
 #include "base/task/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "content/public/browser/device_service.h"
@@ -146,4 +146,5 @@ void Initialize(v8::Local<v8::Object> exports,
 
 }  // namespace
 
-NODE_LINKED_MODULE_CONTEXT_AWARE(atom_browser_power_save_blocker, Initialize)
+NODE_LINKED_MODULE_CONTEXT_AWARE(electron_browser_power_save_blocker,
+                                 Initialize)

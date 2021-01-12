@@ -16,7 +16,7 @@
 #include <wrl/client.h>
 
 #include "base/bind.h"
-#include "base/bind_helpers.h"
+#include "base/callback_helpers.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
@@ -24,6 +24,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_co_mem.h"
@@ -31,6 +32,7 @@
 #include "base/win/windows_version.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "shell/common/electron_paths.h"
 #include "ui/base/win/shell.h"
 #include "url/gurl.h"
 
@@ -317,8 +319,8 @@ std::string OpenPathOnThread(const base::FilePath& full_path) {
 namespace platform_util {
 
 void ShowItemInFolder(const base::FilePath& full_path) {
-  base::CreateCOMSTATaskRunner(
-      {base::ThreadPool(), base::MayBlock(), base::TaskPriority::USER_BLOCKING})
+  base::ThreadPool::CreateCOMSTATaskRunner(
+      {base::MayBlock(), base::TaskPriority::USER_BLOCKING})
       ->PostTask(FROM_HERE,
                  base::BindOnce(&ShowItemInFolderOnWorkerThread, full_path));
 }
@@ -327,8 +329,8 @@ void OpenPath(const base::FilePath& full_path, OpenCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   base::PostTaskAndReplyWithResult(
-      base::CreateCOMSTATaskRunner({base::ThreadPool(), base::MayBlock(),
-                                    base::TaskPriority::USER_BLOCKING})
+      base::ThreadPool::CreateCOMSTATaskRunner(
+          {base::MayBlock(), base::TaskPriority::USER_BLOCKING})
           .get(),
       FROM_HERE, base::BindOnce(&OpenPathOnThread, full_path),
       std::move(callback));
@@ -338,22 +340,22 @@ void OpenExternal(const GURL& url,
                   const OpenExternalOptions& options,
                   OpenCallback callback) {
   base::PostTaskAndReplyWithResult(
-      base::CreateCOMSTATaskRunner({base::ThreadPool(), base::MayBlock(),
-                                    base::TaskPriority::USER_BLOCKING})
+      base::ThreadPool::CreateCOMSTATaskRunner(
+          {base::MayBlock(), base::TaskPriority::USER_BLOCKING})
           .get(),
       FROM_HERE, base::BindOnce(&OpenExternalOnWorkerThread, url, options),
       std::move(callback));
 }
 
-bool MoveItemToTrash(const base::FilePath& path, bool delete_on_fail) {
-  base::win::ScopedCOMInitializer com_initializer;
-  if (!com_initializer.Succeeded())
-    return false;
-
+bool MoveItemToTrashWithError(const base::FilePath& path,
+                              bool delete_on_fail,
+                              std::string* error) {
   Microsoft::WRL::ComPtr<IFileOperation> pfo;
   if (FAILED(::CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL,
-                                IID_PPV_ARGS(&pfo))))
+                                IID_PPV_ARGS(&pfo)))) {
+    *error = "Failed to create FileOperation instance";
     return false;
+  }
 
   // Elevation prompt enabled for UAC protected files.  This overrides the
   // SILENT, NO_UI and NOERRORUI flags.
@@ -363,32 +365,85 @@ bool MoveItemToTrash(const base::FilePath& path, bool delete_on_fail) {
     // ALLOWUNDO in favor of ADDUNDORECORD.
     if (FAILED(pfo->SetOperationFlags(
             FOF_NO_UI | FOFX_ADDUNDORECORD | FOF_NOERRORUI | FOF_SILENT |
-            FOFX_SHOWELEVATIONPROMPT | FOFX_RECYCLEONDELETE)))
+            FOFX_SHOWELEVATIONPROMPT | FOFX_RECYCLEONDELETE))) {
+      *error = "Failed to set operation flags";
       return false;
+    }
   } else {
     // For Windows 7 and Vista, RecycleOnDelete is the default behavior.
     if (FAILED(pfo->SetOperationFlags(FOF_NO_UI | FOF_ALLOWUNDO |
                                       FOF_NOERRORUI | FOF_SILENT |
-                                      FOFX_SHOWELEVATIONPROMPT)))
+                                      FOFX_SHOWELEVATIONPROMPT))) {
+      *error = "Failed to set operation flags";
       return false;
+    }
   }
 
   // Create an IShellItem from the supplied source path.
   Microsoft::WRL::ComPtr<IShellItem> delete_item;
   if (FAILED(SHCreateItemFromParsingName(
           path.value().c_str(), NULL,
-          IID_PPV_ARGS(delete_item.GetAddressOf()))))
+          IID_PPV_ARGS(delete_item.GetAddressOf())))) {
+    *error = "Failed to parse path";
     return false;
+  }
 
   Microsoft::WRL::ComPtr<IFileOperationProgressSink> delete_sink(
       new DeleteFileProgressSink);
-  if (!delete_sink)
+  if (!delete_sink) {
+    *error = "Failed to create delete sink";
     return false;
+  }
+
+  BOOL pfAnyOperationsAborted;
 
   // Processes the queued command DeleteItem. This will trigger
   // the DeleteFileProgressSink to check for Recycle Bin.
-  return SUCCEEDED(pfo->DeleteItem(delete_item.Get(), delete_sink.Get())) &&
-         SUCCEEDED(pfo->PerformOperations());
+  if (!SUCCEEDED(pfo->DeleteItem(delete_item.Get(), delete_sink.Get()))) {
+    *error = "Failed to enqueue DeleteItem command";
+    return false;
+  }
+
+  if (!SUCCEEDED(pfo->PerformOperations())) {
+    *error = "Failed to perform delete operation";
+    return false;
+  }
+
+  if (!SUCCEEDED(pfo->GetAnyOperationsAborted(&pfAnyOperationsAborted))) {
+    *error = "Failed to check operation status";
+    return false;
+  }
+
+  if (pfAnyOperationsAborted) {
+    *error = "Operation was aborted";
+    return false;
+  }
+
+  return true;
+}
+
+namespace internal {
+
+bool PlatformTrashItem(const base::FilePath& full_path, std::string* error) {
+  return MoveItemToTrashWithError(full_path, false, error);
+}
+
+}  // namespace internal
+
+bool GetFolderPath(int key, base::FilePath* result) {
+  wchar_t system_buffer[MAX_PATH];
+
+  switch (key) {
+    case electron::DIR_RECENT:
+      if (FAILED(SHGetFolderPath(NULL, CSIDL_RECENT, NULL, SHGFP_TYPE_CURRENT,
+                                 system_buffer))) {
+        return false;
+      }
+      *result = base::FilePath(system_buffer);
+      break;
+  }
+
+  return true;
 }
 
 void Beep() {

@@ -8,29 +8,29 @@ and respond with custom instance. Also allows for us to at-runtime
 enable or disable this patch.
 
 diff --git a/content/browser/browsing_instance.cc b/content/browser/browsing_instance.cc
-index f49ec7e1456751e506609a797f0b3b97b3e86a56..c7198c08d9292981d6fba12d5941f606c03b5d35 100644
+index 2fdd2b3f3f8dcc14a2675b1c115d7b700a33c2e0..9f20f0f37890af424aba566f88653e6142d944eb 100644
 --- a/content/browser/browsing_instance.cc
 +++ b/content/browser/browsing_instance.cc
-@@ -84,6 +84,13 @@ scoped_refptr<SiteInstanceImpl> BrowsingInstance::GetSiteInstanceForURL(
+@@ -77,6 +77,13 @@ scoped_refptr<SiteInstanceImpl> BrowsingInstance::GetSiteInstanceForURL(
    return instance;
  }
  
 +scoped_refptr<SiteInstanceImpl> BrowsingInstance::CreateSiteInstanceForURL(
 +    const GURL& url) {
 +  scoped_refptr<SiteInstanceImpl> instance = new SiteInstanceImpl(this);
-+  instance->SetSite(url);
++  instance->SetSite(UrlInfo(url, false));
 +  return instance;
 +}
 +
- void BrowsingInstance::GetSiteAndLockForURL(const GURL& url,
-                                             bool allow_default_instance,
-                                             GURL* site_url,
+ SiteInfo BrowsingInstance::GetSiteInfoForURL(const UrlInfo& url_info,
+                                              bool allow_default_instance) {
+   scoped_refptr<SiteInstanceImpl> site_instance =
 diff --git a/content/browser/browsing_instance.h b/content/browser/browsing_instance.h
-index 906a1ee4ac58b0744a32153bbaafeac4322a60e4..c90f4aead36cbf3767dc5094728963c24798e204 100644
+index 65e627f2fa89352b0be27b5813d71a622bf1d326..113f4fd00f1cf994b39f64c9da38785545ba321f 100644
 --- a/content/browser/browsing_instance.h
 +++ b/content/browser/browsing_instance.h
-@@ -136,6 +136,11 @@ class CONTENT_EXPORT BrowsingInstance final
-       const GURL& url,
+@@ -149,6 +149,11 @@ class CONTENT_EXPORT BrowsingInstance final
+       const UrlInfo& url_info,
        bool allow_default_instance);
  
 +  // Create a new SiteInstance for the given URL bound the current
@@ -41,43 +41,78 @@ index 906a1ee4ac58b0744a32153bbaafeac4322a60e4..c90f4aead36cbf3767dc5094728963c2
    // Adds the given SiteInstance to our map, to ensure that we do not create
    // another SiteInstance for the same site.
    void RegisterSiteInstance(SiteInstanceImpl* site_instance);
-diff --git a/content/browser/frame_host/navigation_request.cc b/content/browser/frame_host/navigation_request.cc
-index e911c3aa1cf13b17bd43ad8c9d50f0fd59996907..373e36eb61d57e1bcd98d45419ee4b434820bf02 100644
---- a/content/browser/frame_host/navigation_request.cc
-+++ b/content/browser/frame_host/navigation_request.cc
-@@ -1185,6 +1185,24 @@ void NavigationRequest::BeginNavigation() {
-     TRACE_EVENT_ASYNC_STEP_INTO0("navigation", "NavigationRequest", this,
-                                  "ResponseStarted");
- 
-+    // In Electron, a new process is started for every navigation when node is
-+    // integrated in the renderer. Since GetFrameHostForNavigation is called more
-+    // than once per navigation, we want to return the same frame host once
-+    // the response has started, otherwise if the frame host that started the response
-+    // and the frame host that is available for commit don't match then request will
-+    // be cancelled. We rely on the NavigationRequest::state_ to determine this
-+    // factor
-+    //
-+    // bool has_response_started =
-+    //    (request->state() >= NavigationRequest::WILL_PROCESS_RESPONSE &&
-+    //     !speculative_render_frame_host_);
-+    //
-+    // Hence this call is necesary before the call to GetFrameHostForNavigation. Also
-+    // the state_ here is anyway going to end up being READY_TO_COMMIT because of
-+    // ReadyToCommitNavigation a few lines later, so will not affect normal chromium
-+    // request cycle.
-+    state_ = READY_TO_COMMIT;
+diff --git a/content/browser/renderer_host/navigation_request.cc b/content/browser/renderer_host/navigation_request.cc
+index 29394a1584371f9304a30544e6f223acc8817e3b..d6596daf05721be7e8a9b939f162525199b85695 100644
+--- a/content/browser/renderer_host/navigation_request.cc
++++ b/content/browser/renderer_host/navigation_request.cc
+@@ -1454,6 +1454,21 @@ void NavigationRequest::BeginNavigation() {
+     if (IsSameDocument()) {
+       render_frame_host_ = frame_tree_node_->current_frame_host();
+     } else {
++      // In Electron, a new process is started for every navigation when node is
++      // integrated in the renderer. Since GetFrameHostForNavigation is called more
++      // than once per navigation, we want to return the same frame host once
++      // the response has started, otherwise if the frame host that started the response
++      // and the frame host that is available for commit don't match then request will
++      // be cancelled. We rely on the NavigationRequest::state_ to determine this
++      // factor
++      //
++      // bool has_response_started =
++      //    (request->state() >= NavigationRequest::WILL_PROCESS_RESPONSE &&
++      //     !speculative_render_frame_host_);
++      //
++      // Hence this call is necesary before the call to GetFrameHostForNavigation.
++      SetState(REUSE_SITE_INSTANCE);
 +
-     // Select an appropriate RenderFrameHost.
-     render_frame_host_ =
-         frame_tree_node_->render_manager()->GetFrameHostForNavigation(this);
-diff --git a/content/browser/frame_host/render_frame_host_manager.cc b/content/browser/frame_host/render_frame_host_manager.cc
-index e41e833e963617cf5b2e463e839b2ae0bfd212ae..f544da86cb12d2786f7aad24953741ed77a0ac24 100644
---- a/content/browser/frame_host/render_frame_host_manager.cc
-+++ b/content/browser/frame_host/render_frame_host_manager.cc
-@@ -2247,6 +2247,16 @@ bool RenderFrameHostManager::InitRenderView(
- scoped_refptr<SiteInstance>
+       // Select an appropriate RenderFrameHost.
+       std::string frame_host_choice_reason;
+       render_frame_host_ =
+@@ -5343,6 +5358,7 @@ void NavigationRequest::CheckStateTransition(NavigationState state) const {
+           {WILL_START_REQUEST, {
+               WILL_REDIRECT_REQUEST,
+               WILL_PROCESS_RESPONSE,
++              REUSE_SITE_INSTANCE,
+               READY_TO_COMMIT,
+               DID_COMMIT,
+               CANCELING,
+@@ -5356,10 +5372,14 @@ void NavigationRequest::CheckStateTransition(NavigationState state) const {
+               WILL_FAIL_REQUEST,
+           }},
+           {WILL_PROCESS_RESPONSE, {
++              REUSE_SITE_INSTANCE,
+               READY_TO_COMMIT,
+               CANCELING,
+               WILL_FAIL_REQUEST,
+           }},
++          {REUSE_SITE_INSTANCE, {
++              READY_TO_COMMIT,
++          }},
+           {READY_TO_COMMIT, {
+               NOT_STARTED,
+               DID_COMMIT,
+diff --git a/content/browser/renderer_host/navigation_request.h b/content/browser/renderer_host/navigation_request.h
+index dd495343ea53fa03f9f7b6f06e5da00d2e5c9903..66ea89b7ecbe249f0c7b7f779c2e325f474ac913 100644
+--- a/content/browser/renderer_host/navigation_request.h
++++ b/content/browser/renderer_host/navigation_request.h
+@@ -131,6 +131,10 @@ class CONTENT_EXPORT NavigationRequest
+     // asynchronous.
+     WILL_PROCESS_RESPONSE,
+ 
++    // Electron: state that is between than WILL_PROCESS_RESPONSE and
++    // READY_TO_COMMIT to force reuse the same site instance.
++    REUSE_SITE_INSTANCE,
++
+     // The response started on the IO thread and is ready to be committed.
+     READY_TO_COMMIT,
+ 
+diff --git a/content/browser/renderer_host/render_frame_host_manager.cc b/content/browser/renderer_host/render_frame_host_manager.cc
+index 3f9343bcdef5848f6017f1b1a73dc5306cd0c2a0..aa72c3a7ede9e62a3945304f5a38b17f55f7b09c 100644
+--- a/content/browser/renderer_host/render_frame_host_manager.cc
++++ b/content/browser/renderer_host/render_frame_host_manager.cc
+@@ -2724,6 +2724,16 @@ scoped_refptr<SiteInstance>
  RenderFrameHostManager::GetSiteInstanceForNavigationRequest(
-     NavigationRequest* request) {
+     NavigationRequest* request,
+     std::string* reason) {
 +  // Compute the SiteInstance that the navigation should use, which will be
 +  // either the current SiteInstance or a new one.
 +  //
@@ -91,7 +126,7 @@ index e41e833e963617cf5b2e463e839b2ae0bfd212ae..f544da86cb12d2786f7aad24953741ed
    SiteInstance* current_site_instance = render_frame_host_->GetSiteInstance();
  
    // All children of MHTML documents must be MHTML documents. They all live in
-@@ -2266,10 +2276,60 @@ RenderFrameHostManager::GetSiteInstanceForNavigationRequest(
+@@ -2751,10 +2761,60 @@ RenderFrameHostManager::GetSiteInstanceForNavigationRequest(
    //
    // TODO(clamy): We should also consider as a candidate SiteInstance the
    // speculative SiteInstance that was computed on redirects.
@@ -156,9 +191,9 @@ index e41e833e963617cf5b2e463e839b2ae0bfd212ae..f544da86cb12d2786f7aad24953741ed
  
    // Account for renderer-initiated reload as well.
    // Needed as a workaround for https://crbug.com/1045524, remove it when it is
-@@ -2300,6 +2360,9 @@ RenderFrameHostManager::GetSiteInstanceForNavigationRequest(
-       request->GetRestoreType() != RestoreType::NONE, request->is_view_source(),
-       request->WasServerRedirect(), cross_origin_policy_swap);
+@@ -2794,6 +2854,9 @@ RenderFrameHostManager::GetSiteInstanceForNavigationRequest(
+     request->ResetStateForSiteInstanceChange();
+   }
  
 +  GetContentClient()->browser()->RegisterPendingSiteInstance(
 +      render_frame_host_.get(), dest_site_instance.get());
@@ -167,11 +202,11 @@ index e41e833e963617cf5b2e463e839b2ae0bfd212ae..f544da86cb12d2786f7aad24953741ed
  }
  
 diff --git a/content/browser/site_instance_impl.cc b/content/browser/site_instance_impl.cc
-index eb20d84de260b35049cac72fdc8d0645688fdd9a..eb3106ece80f3b347b7b13efbd77b11a60e03169 100644
+index 34f32197686fbb350a065cb2ce554a7b4ae917b5..7196c8a8b1be2d4e3496de2de1e8f62430696021 100644
 --- a/content/browser/site_instance_impl.cc
 +++ b/content/browser/site_instance_impl.cc
-@@ -427,6 +427,10 @@ bool SiteInstanceImpl::HasRelatedSiteInstance(const GURL& url) {
-   return browsing_instance_->HasSiteInstance(url);
+@@ -742,6 +742,10 @@ bool SiteInstanceImpl::HasRelatedSiteInstance(const SiteInfo& site_info) {
+   return browsing_instance_->HasSiteInstance(site_info);
  }
  
 +scoped_refptr<SiteInstance> SiteInstanceImpl::CreateRelatedSiteInstance(const GURL& url) {
@@ -180,12 +215,12 @@ index eb20d84de260b35049cac72fdc8d0645688fdd9a..eb3106ece80f3b347b7b13efbd77b11a
 +
  scoped_refptr<SiteInstance> SiteInstanceImpl::GetRelatedSiteInstance(
      const GURL& url) {
-   return browsing_instance_->GetSiteInstanceForURL(
+   return GetRelatedSiteInstanceImpl(
 diff --git a/content/browser/site_instance_impl.h b/content/browser/site_instance_impl.h
-index caa100b3889e17a9afdc8127e0e13bb6b86e8042..f08d3a2eb28f0f6fff89b5759eff5369b7111821 100644
+index 3dc0f0cf7f3e9b9e75cf053817e9ac5fba0182bc..16759a044e24ac3c0719a57e196fbf3e2975f1b9 100644
 --- a/content/browser/site_instance_impl.h
 +++ b/content/browser/site_instance_impl.h
-@@ -98,6 +98,7 @@ class CONTENT_EXPORT SiteInstanceImpl final : public SiteInstance,
+@@ -321,6 +321,7 @@ class CONTENT_EXPORT SiteInstanceImpl final : public SiteInstance,
    BrowserContext* GetBrowserContext() override;
    const GURL& GetSiteURL() override;
    scoped_refptr<SiteInstance> GetRelatedSiteInstance(const GURL& url) override;
@@ -194,10 +229,10 @@ index caa100b3889e17a9afdc8127e0e13bb6b86e8042..f08d3a2eb28f0f6fff89b5759eff5369
    size_t GetRelatedActiveContentsCount() override;
    bool RequiresDedicatedProcess() override;
 diff --git a/content/public/browser/content_browser_client.cc b/content/public/browser/content_browser_client.cc
-index 930e043a0fdf40ef0e48a19597da567c8603878c..b6ba4dfad79d6031efd725de795bf901bab1a06c 100644
+index 05b2d9b76ae5c5f2a39303282a9c5c7326489d3b..f811ea8efeeace5a59a53714a8f8ac3b194f3ba5 100644
 --- a/content/public/browser/content_browser_client.cc
 +++ b/content/public/browser/content_browser_client.cc
-@@ -50,6 +50,21 @@
+@@ -65,6 +65,21 @@
  
  namespace content {
  
@@ -220,10 +255,10 @@ index 930e043a0fdf40ef0e48a19597da567c8603878c..b6ba4dfad79d6031efd725de795bf901
      const MainFunctionParams& parameters) {
    return nullptr;
 diff --git a/content/public/browser/content_browser_client.h b/content/public/browser/content_browser_client.h
-index f9601b5813746ce930bb7082178e1f826aaeb62e..f94bc9e640b54c6abf05bfe074ae0635d57470e8 100644
+index bdb9c61af7c5b84c358a8e0282e4c06fcb05fdfe..57a8cc905275440349607bbce381da5ca679ea6d 100644
 --- a/content/public/browser/content_browser_client.h
 +++ b/content/public/browser/content_browser_client.h
-@@ -233,8 +233,45 @@ class CONTENT_EXPORT ContentBrowserClient {
+@@ -254,8 +254,45 @@ class CONTENT_EXPORT ContentBrowserClient {
    using IsClipboardPasteAllowedCallback =
        base::OnceCallback<void(ClipboardPasteAllowed)>;
  
@@ -246,7 +281,7 @@ index f9601b5813746ce930bb7082178e1f826aaeb62e..f94bc9e640b54c6abf05bfe074ae0635
 +    ASK_CHROMIUM
 +  };
 +
-   virtual ~ContentBrowserClient() {}
+   virtual ~ContentBrowserClient() = default;
  
 +  // Electron: Allows disabling the below ShouldOverride patch
 +  virtual bool CanUseCustomSiteInstance();
@@ -270,10 +305,10 @@ index f9601b5813746ce930bb7082178e1f826aaeb62e..f94bc9e640b54c6abf05bfe074ae0635
    // implementations for the browser startup code. See comments in
    // browser_main_parts.h.
 diff --git a/content/public/browser/site_instance.h b/content/public/browser/site_instance.h
-index e3095f34c057ccf25b46beb809fbb88a440cc230..9d4472415d87455468cff86217e7489d39383e4e 100644
+index a721f2fbab6e621085a8c7806abd92b8077340a8..e9b936e05e1d6ac8ea6eb5eb4d412b37ae4acc86 100644
 --- a/content/public/browser/site_instance.h
 +++ b/content/public/browser/site_instance.h
-@@ -121,6 +121,11 @@ class CONTENT_EXPORT SiteInstance : public base::RefCounted<SiteInstance> {
+@@ -135,6 +135,11 @@ class CONTENT_EXPORT SiteInstance : public base::RefCounted<SiteInstance> {
    //   corresponds to a site URL with the host "example.com".
    virtual const GURL& GetSiteURL() = 0;
  

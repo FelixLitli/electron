@@ -43,6 +43,7 @@ class ProxyingURLLoaderFactory
                             public network::mojom::URLLoaderClient,
                             public network::mojom::TrustedHeaderClient {
    public:
+    // For usual requests.
     InProgressRequest(
         ProxyingURLLoaderFactory* factory,
         int64_t web_request_id,
@@ -51,16 +52,22 @@ class ProxyingURLLoaderFactory
         uint32_t options,
         const network::ResourceRequest& request,
         const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
-        network::mojom::URLLoaderRequest loader_request,
+        mojo::PendingReceiver<network::mojom::URLLoader> loader_receiver,
         mojo::PendingRemote<network::mojom::URLLoaderClient> client);
+    // For CORS preflights.
+    InProgressRequest(ProxyingURLLoaderFactory* factory,
+                      uint64_t request_id,
+                      const network::ResourceRequest& request);
     ~InProgressRequest() override;
 
     void Restart();
 
     // network::mojom::URLLoader:
-    void FollowRedirect(const std::vector<std::string>& removed_headers,
-                        const net::HttpRequestHeaders& modified_headers,
-                        const base::Optional<GURL>& new_url) override;
+    void FollowRedirect(
+        const std::vector<std::string>& removed_headers,
+        const net::HttpRequestHeaders& modified_headers,
+        const net::HttpRequestHeaders& modified_cors_exempt_headers,
+        const base::Optional<GURL>& new_url) override;
     void SetPriority(net::RequestPriority priority,
                      int32_t intra_priority_value) override;
     void PauseReadingBodyFromNet() override;
@@ -111,12 +118,12 @@ class ProxyingURLLoaderFactory
     ProxyingURLLoaderFactory* factory_;
     network::ResourceRequest request_;
     const base::Optional<url::Origin> original_initiator_;
-    const uint64_t request_id_;
-    const int32_t routing_id_;
-    const int32_t network_service_request_id_;
-    const uint32_t options_;
+    const uint64_t request_id_ = 0;
+    const int32_t routing_id_ = 0;
+    const int32_t network_service_request_id_ = 0;
+    const uint32_t options_ = 0;
     const net::MutableNetworkTrafficAnnotationTag traffic_annotation_;
-    mojo::Binding<network::mojom::URLLoader> proxied_loader_binding_;
+    mojo::Receiver<network::mojom::URLLoader> proxied_loader_receiver_;
     mojo::Remote<network::mojom::URLLoaderClient> target_client_;
 
     base::Optional<extensions::WebRequestInfo> info_;
@@ -129,7 +136,7 @@ class ProxyingURLLoaderFactory
         this};
     network::mojom::URLLoaderPtr target_loader_;
 
-    bool request_completed_ = false;
+    const bool for_cors_preflight_ = false;
 
     // If |has_any_extra_headers_listeners_| is set to true, the request will be
     // sent with the network::mojom::kURLLoadOptionUseHeaderClient option, and
@@ -153,6 +160,7 @@ class ProxyingURLLoaderFactory
       ~FollowRedirectParams();
       std::vector<std::string> removed_headers;
       net::HttpRequestHeaders modified_headers;
+      net::HttpRequestHeaders modified_cors_exempt_headers;
       base::Optional<GURL> new_url;
 
       DISALLOW_COPY_AND_ASSIGN(FollowRedirectParams);
@@ -167,7 +175,6 @@ class ProxyingURLLoaderFactory
   ProxyingURLLoaderFactory(
       WebRequestAPI* web_request_api,
       const HandlersMap& intercepted_handlers,
-      content::BrowserContext* browser_context,
       int render_process_id,
       uint64_t* request_id_generator,
       std::unique_ptr<extensions::ExtensionNavigationUIData> navigation_ui_data,
@@ -201,7 +208,7 @@ class ProxyingURLLoaderFactory
   void OnLoaderForCorsPreflightCreated(
       const network::ResourceRequest& request,
       mojo::PendingReceiver<network::mojom::TrustedHeaderClient> receiver)
-      override {}
+      override;
 
   WebRequestAPI* web_request_api() { return web_request_api_; }
 
@@ -220,16 +227,15 @@ class ProxyingURLLoaderFactory
 
   // This is passed from api::Protocol.
   //
-  // The Protocol instance lives through the lifetime of BrowserContenxt,
-  // which is guarenteed to cover the lifetime of URLLoaderFactory, so the
-  // reference is guarenteed to be valid.
+  // The Protocol instance lives through the lifetime of BrowserContext,
+  // which is guaranteed to cover the lifetime of URLLoaderFactory, so the
+  // reference is guaranteed to be valid.
   //
   // In this way we can avoid using code from api namespace in this file.
   const HandlersMap& intercepted_handlers_;
 
-  content::BrowserContext* const browser_context_;
   const int render_process_id_;
-  uint64_t* request_id_generator_;  // managed by AtomBrowserClient
+  uint64_t* request_id_generator_;  // managed by ElectronBrowserClient
   std::unique_ptr<extensions::ExtensionNavigationUIData> navigation_ui_data_;
   base::Optional<int64_t> navigation_id_;
   mojo::ReceiverSet<network::mojom::URLLoaderFactory> proxy_receivers_;

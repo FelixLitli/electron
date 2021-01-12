@@ -125,7 +125,7 @@ std::string ConvertSystemPermission(
 
 void SystemPreferences::PostNotification(const std::string& name,
                                          base::DictionaryValue user_info,
-                                         gin_helper::Arguments* args) {
+                                         gin::Arguments* args) {
   bool immediate = false;
   args->GetNext(&immediate);
 
@@ -140,12 +140,13 @@ void SystemPreferences::PostNotification(const std::string& name,
 int SystemPreferences::SubscribeNotification(
     const std::string& name,
     const NotificationCallback& callback) {
-  return DoSubscribeNotification(name, callback,
-                                 kNSDistributedNotificationCenter);
+  return DoSubscribeNotification(
+      name, callback, NotificationCenterKind::kNSDistributedNotificationCenter);
 }
 
 void SystemPreferences::UnsubscribeNotification(int request_id) {
-  DoUnsubscribeNotification(request_id, kNSDistributedNotificationCenter);
+  DoUnsubscribeNotification(
+      request_id, NotificationCenterKind::kNSDistributedNotificationCenter);
 }
 
 void SystemPreferences::PostLocalNotification(const std::string& name,
@@ -159,11 +160,13 @@ void SystemPreferences::PostLocalNotification(const std::string& name,
 int SystemPreferences::SubscribeLocalNotification(
     const std::string& name,
     const NotificationCallback& callback) {
-  return DoSubscribeNotification(name, callback, kNSNotificationCenter);
+  return DoSubscribeNotification(name, callback,
+                                 NotificationCenterKind::kNSNotificationCenter);
 }
 
 void SystemPreferences::UnsubscribeLocalNotification(int request_id) {
-  DoUnsubscribeNotification(request_id, kNSNotificationCenter);
+  DoUnsubscribeNotification(request_id,
+                            NotificationCenterKind::kNSNotificationCenter);
 }
 
 void SystemPreferences::PostWorkspaceNotification(
@@ -179,12 +182,13 @@ void SystemPreferences::PostWorkspaceNotification(
 int SystemPreferences::SubscribeWorkspaceNotification(
     const std::string& name,
     const NotificationCallback& callback) {
-  return DoSubscribeNotification(name, callback,
-                                 kNSWorkspaceNotificationCenter);
+  return DoSubscribeNotification(
+      name, callback, NotificationCenterKind::kNSWorkspaceNotificationCenter);
 }
 
 void SystemPreferences::UnsubscribeWorkspaceNotification(int request_id) {
-  DoUnsubscribeNotification(request_id, kNSWorkspaceNotificationCenter);
+  DoUnsubscribeNotification(
+      request_id, NotificationCenterKind::kNSWorkspaceNotificationCenter);
 }
 
 int SystemPreferences::DoSubscribeNotification(
@@ -195,13 +199,13 @@ int SystemPreferences::DoSubscribeNotification(
   __block NotificationCallback copied_callback = callback;
   NSNotificationCenter* center;
   switch (kind) {
-    case kNSDistributedNotificationCenter:
+    case NotificationCenterKind::kNSDistributedNotificationCenter:
       center = [NSDistributedNotificationCenter defaultCenter];
       break;
-    case kNSNotificationCenter:
+    case NotificationCenterKind::kNSNotificationCenter:
       center = [NSNotificationCenter defaultCenter];
       break;
-    case kNSWorkspaceNotificationCenter:
+    case NotificationCenterKind::kNSWorkspaceNotificationCenter:
       center = [[NSWorkspace sharedWorkspace] notificationCenter];
       break;
     default:
@@ -239,13 +243,13 @@ void SystemPreferences::DoUnsubscribeNotification(int request_id,
     id observer = iter->second;
     NSNotificationCenter* center;
     switch (kind) {
-      case kNSDistributedNotificationCenter:
+      case NotificationCenterKind::kNSDistributedNotificationCenter:
         center = [NSDistributedNotificationCenter defaultCenter];
         break;
-      case kNSNotificationCenter:
+      case NotificationCenterKind::kNSNotificationCenter:
         center = [NSNotificationCenter defaultCenter];
         break;
-      case kNSWorkspaceNotificationCenter:
+      case NotificationCenterKind::kNSWorkspaceNotificationCenter:
         center = [[NSWorkspace sharedWorkspace] notificationCenter];
         break;
       default:
@@ -257,140 +261,126 @@ void SystemPreferences::DoUnsubscribeNotification(int request_id,
 }
 
 v8::Local<v8::Value> SystemPreferences::GetUserDefault(
+    v8::Isolate* isolate,
     const std::string& name,
     const std::string& type) {
   NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
   NSString* key = base::SysUTF8ToNSString(name);
   if (type == "string") {
     return gin::StringToV8(
-        isolate(), base::SysNSStringToUTF8([defaults stringForKey:key]));
+        isolate, base::SysNSStringToUTF8([defaults stringForKey:key]));
   } else if (type == "boolean") {
-    return v8::Boolean::New(isolate(), [defaults boolForKey:key]);
+    return v8::Boolean::New(isolate, [defaults boolForKey:key]);
   } else if (type == "float") {
-    return v8::Number::New(isolate(), [defaults floatForKey:key]);
+    return v8::Number::New(isolate, [defaults floatForKey:key]);
   } else if (type == "integer") {
-    return v8::Integer::New(isolate(), [defaults integerForKey:key]);
+    return v8::Integer::New(isolate, [defaults integerForKey:key]);
   } else if (type == "double") {
-    return v8::Number::New(isolate(), [defaults doubleForKey:key]);
+    return v8::Number::New(isolate, [defaults doubleForKey:key]);
   } else if (type == "url") {
-    return gin::ConvertToV8(isolate(),
+    return gin::ConvertToV8(isolate,
                             net::GURLWithNSURL([defaults URLForKey:key]));
   } else if (type == "array") {
-    return gin::ConvertToV8(isolate(),
+    return gin::ConvertToV8(isolate,
                             NSArrayToListValue([defaults arrayForKey:key]));
   } else if (type == "dictionary") {
-    return gin::ConvertToV8(isolate(), NSDictionaryToDictionaryValue(
-                                           [defaults dictionaryForKey:key]));
+    return gin::ConvertToV8(isolate, NSDictionaryToDictionaryValue(
+                                         [defaults dictionaryForKey:key]));
   } else {
-    return v8::Undefined(isolate());
+    return v8::Undefined(isolate);
   }
 }
 
-void SystemPreferences::RegisterDefaults(gin_helper::Arguments* args) {
+void SystemPreferences::RegisterDefaults(gin::Arguments* args) {
   base::DictionaryValue value;
 
   if (!args->GetNext(&value)) {
-    args->ThrowError("Invalid userDefault data provided");
+    args->ThrowError();
   } else {
     @try {
       NSDictionary* dict = DictionaryValueToNSDictionary(value);
       for (id key in dict) {
         id value = [dict objectForKey:key];
         if ([value isKindOfClass:[NSNull class]] || value == nil) {
-          args->ThrowError("Invalid userDefault data provided");
+          args->ThrowError();
           return;
         }
       }
       [[NSUserDefaults standardUserDefaults] registerDefaults:dict];
     } @catch (NSException* exception) {
-      args->ThrowError("Invalid userDefault data provided");
+      args->ThrowError();
     }
   }
 }
 
 void SystemPreferences::SetUserDefault(const std::string& name,
                                        const std::string& type,
-                                       gin_helper::Arguments* args) {
-  const auto throwConversionError = [&] {
-    args->ThrowError("Unable to convert value to: " + type);
-  };
-
+                                       gin::Arguments* args) {
   NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
   NSString* key = base::SysUTF8ToNSString(name);
   if (type == "string") {
     std::string value;
-    if (!args->GetNext(&value)) {
-      throwConversionError();
+    if (args->GetNext(&value)) {
+      [defaults setObject:base::SysUTF8ToNSString(value) forKey:key];
       return;
     }
-
-    [defaults setObject:base::SysUTF8ToNSString(value) forKey:key];
   } else if (type == "boolean") {
     bool value;
-    if (!args->GetNext(&value)) {
-      throwConversionError();
+    v8::Local<v8::Value> next = args->PeekNext();
+    if (!next.IsEmpty() && next->IsBoolean() && args->GetNext(&value)) {
+      [defaults setBool:value forKey:key];
       return;
     }
-
-    [defaults setBool:value forKey:key];
   } else if (type == "float") {
     float value;
-    if (!args->GetNext(&value)) {
-      throwConversionError();
+    if (args->GetNext(&value)) {
+      [defaults setFloat:value forKey:key];
       return;
     }
-
-    [defaults setFloat:value forKey:key];
   } else if (type == "integer") {
     int value;
-    if (!args->GetNext(&value)) {
-      throwConversionError();
+    if (args->GetNext(&value)) {
+      [defaults setInteger:value forKey:key];
       return;
     }
-
-    [defaults setInteger:value forKey:key];
   } else if (type == "double") {
     double value;
-    if (!args->GetNext(&value)) {
-      throwConversionError();
+    if (args->GetNext(&value)) {
+      [defaults setDouble:value forKey:key];
       return;
     }
-
-    [defaults setDouble:value forKey:key];
   } else if (type == "url") {
     GURL value;
-    if (!args->GetNext(&value)) {
-      throwConversionError();
-      return;
-    }
-
-    if (NSURL* url = net::NSURLWithGURL(value)) {
-      [defaults setURL:url forKey:key];
+    if (args->GetNext(&value)) {
+      if (NSURL* url = net::NSURLWithGURL(value)) {
+        [defaults setURL:url forKey:key];
+        return;
+      }
     }
   } else if (type == "array") {
     base::ListValue value;
-    if (!args->GetNext(&value)) {
-      throwConversionError();
-      return;
-    }
-
-    if (NSArray* array = ListValueToNSArray(value)) {
-      [defaults setObject:array forKey:key];
+    if (args->GetNext(&value)) {
+      if (NSArray* array = ListValueToNSArray(value)) {
+        [defaults setObject:array forKey:key];
+        return;
+      }
     }
   } else if (type == "dictionary") {
     base::DictionaryValue value;
-    if (!args->GetNext(&value)) {
-      throwConversionError();
-      return;
-    }
-
-    if (NSDictionary* dict = DictionaryValueToNSDictionary(value)) {
-      [defaults setObject:dict forKey:key];
+    if (args->GetNext(&value)) {
+      if (NSDictionary* dict = DictionaryValueToNSDictionary(value)) {
+        [defaults setObject:dict forKey:key];
+        return;
+      }
     }
   } else {
-    args->ThrowError("Invalid type: " + type);
+    gin_helper::ErrorThrower(args->isolate())
+        .ThrowTypeError("Invalid type: " + type);
     return;
   }
+
+  gin_helper::ErrorThrower(args->isolate())
+      .ThrowTypeError("Unable to convert value to: " + type);
 }
 
 std::string SystemPreferences::GetAccentColor() {
@@ -590,8 +580,8 @@ std::string SystemPreferences::GetColor(gin_helper::ErrorThrower thrower,
 }
 
 std::string SystemPreferences::GetMediaAccessStatus(
-    const std::string& media_type,
-    gin_helper::Arguments* args) {
+    gin_helper::ErrorThrower thrower,
+    const std::string& media_type) {
   if (media_type == "camera") {
     return ConvertSystemPermission(
         system_media_permissions::CheckSystemVideoCapturePermission());
@@ -602,7 +592,7 @@ std::string SystemPreferences::GetMediaAccessStatus(
     return ConvertSystemPermission(
         system_media_permissions::CheckSystemScreenCapturePermission());
   } else {
-    args->ThrowError("Invalid media type");
+    thrower.ThrowError("Invalid media type");
     return std::string();
   }
 }
@@ -638,15 +628,6 @@ void SystemPreferences::RemoveUserDefault(const std::string& name) {
   [defaults removeObjectForKey:base::SysUTF8ToNSString(name)];
 }
 
-bool SystemPreferences::IsDarkMode() {
-  if (@available(macOS 10.14, *)) {
-    return ui::NativeTheme::GetInstanceForNativeUi()->ShouldUseDarkColors();
-  }
-  NSString* mode = [[NSUserDefaults standardUserDefaults]
-      stringForKey:@"AppleInterfaceStyle"];
-  return [mode isEqualToString:@"Dark"];
-}
-
 bool SystemPreferences::IsSwipeTrackingFromScrollEventsEnabled() {
   return [NSEvent isSwipeTrackingFromScrollEventsEnabled];
 }
@@ -669,13 +650,13 @@ v8::Local<v8::Value> SystemPreferences::GetAppLevelAppearance(
   return v8::Null(isolate);
 }
 
-void SystemPreferences::SetAppLevelAppearance(gin_helper::Arguments* args) {
+void SystemPreferences::SetAppLevelAppearance(gin::Arguments* args) {
   if (@available(macOS 10.14, *)) {
     NSAppearance* appearance;
     if (args->GetNext(&appearance)) {
       [[NSApplication sharedApplication] setAppearance:appearance];
     } else {
-      args->ThrowError("Invalid app appearance provided as first argument");
+      args->ThrowError();
     }
   }
 }

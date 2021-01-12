@@ -25,7 +25,6 @@ v8::Local<v8::Object> CreateEvent(
     v8::Isolate* isolate,
     v8::Local<v8::Object> sender = v8::Local<v8::Object>(),
     v8::Local<v8::Object> custom_event = v8::Local<v8::Object>());
-v8::Local<v8::Object> CreateEventFromFlags(v8::Isolate* isolate, int flags);
 v8::Local<v8::Object> CreateNativeEvent(
     v8::Isolate* isolate,
     v8::Local<v8::Object> sender,
@@ -59,14 +58,6 @@ class EventEmitter : public gin_helper::Wrappable<T> {
                          std::forward<Args>(args)...);
   }
 
-  // this.emit(name, new Event(flags), args...);
-  template <typename... Args>
-  bool EmitWithFlags(base::StringPiece name, int flags, Args&&... args) {
-    return EmitCustomEvent(name,
-                           internal::CreateEventFromFlags(isolate(), flags),
-                           std::forward<Args>(args)...);
-  }
-
   // this.emit(name, new Event(), args...);
   template <typename... Args>
   bool Emit(base::StringPiece name, Args&&... args) {
@@ -76,23 +67,6 @@ class EventEmitter : public gin_helper::Wrappable<T> {
     if (wrapper.IsEmpty())
       return false;
     v8::Local<v8::Object> event = internal::CreateEvent(isolate(), wrapper);
-    return EmitWithEvent(name, event, std::forward<Args>(args)...);
-  }
-
-  // this.emit(name, new Event(sender, message), args...);
-  template <typename... Args>
-  bool EmitWithSender(base::StringPiece name,
-                      content::RenderFrameHost* sender,
-                      electron::mojom::ElectronBrowser::InvokeCallback callback,
-                      Args&&... args) {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-    v8::Locker locker(isolate());
-    v8::HandleScope handle_scope(isolate());
-    v8::Local<v8::Object> wrapper = GetWrapper();
-    if (wrapper.IsEmpty())
-      return false;
-    v8::Local<v8::Object> event = internal::CreateNativeEvent(
-        isolate(), wrapper, sender, std::move(callback));
     return EmitWithEvent(name, event, std::forward<Args>(args)...);
   }
 
@@ -108,8 +82,6 @@ class EventEmitter : public gin_helper::Wrappable<T> {
     // It's possible that |this| will be deleted by EmitEvent, so save anything
     // we need from |this| before calling EmitEvent.
     auto* isolate = this->isolate();
-    v8::Locker locker(isolate);
-    v8::HandleScope handle_scope(isolate);
     auto context = isolate->GetCurrentContext();
     gin_helper::EmitEvent(isolate, GetWrapper(), name, event,
                           std::forward<Args>(args)...);

@@ -33,8 +33,8 @@ const { app, BrowserWindow, screen } = require('electron')
 let win
 
 app.whenReady().then(() => {
-  let displays = screen.getAllDisplays()
-  let externalDisplay = displays.find((display) => {
+  const displays = screen.getAllDisplays()
+  const externalDisplay = displays.find((display) => {
     return display.bounds.x !== 0 || display.bounds.y !== 0
   })
 
@@ -91,6 +91,8 @@ The `screen` module has the following methods:
 Returns [`Point`](structures/point.md)
 
 The current absolute position of the mouse pointer.
+
+**Note:** The return value is a DIP point, not a screen physical point.
 
 ### `screen.getPrimaryDisplay()`
 

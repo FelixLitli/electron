@@ -10,24 +10,33 @@
 
 #include "base/callback.h"
 #include "gin/arguments.h"
-#include "shell/browser/api/electron_api_top_level_window.h"
+#include "shell/browser/api/electron_api_base_window.h"
+#include "shell/browser/event_emitter_mixin.h"
 #include "shell/browser/ui/electron_menu_model.h"
-#include "shell/common/gin_helper/trackable_object.h"
+#include "shell/common/gin_helper/constructible.h"
+#include "shell/common/gin_helper/pinnable.h"
 
 namespace electron {
 
 namespace api {
 
-class Menu : public gin_helper::TrackableObject<Menu>,
+class Menu : public gin::Wrappable<Menu>,
+             public gin_helper::EventEmitterMixin<Menu>,
+             public gin_helper::Constructible<Menu>,
+             public gin_helper::Pinnable<Menu>,
              public ElectronMenuModel::Delegate,
              public ElectronMenuModel::Observer {
  public:
-  static gin_helper::WrappableBase* New(gin::Arguments* args);
+  // gin_helper::Constructible
+  static gin::Handle<Menu> New(gin::Arguments* args);
+  static v8::Local<v8::ObjectTemplate> FillObjectTemplate(
+      v8::Isolate*,
+      v8::Local<v8::ObjectTemplate>);
 
-  static void BuildPrototype(v8::Isolate* isolate,
-                             v8::Local<v8::FunctionTemplate> prototype);
+  // gin::Wrappable
+  static gin::WrapperInfo kWrapperInfo;
 
-#if defined(OS_MACOSX)
+#if defined(OS_MAC)
   // Set the global menubar.
   static void SetApplicationMenu(Menu* menu);
 
@@ -41,8 +50,9 @@ class Menu : public gin_helper::TrackableObject<Menu>,
   explicit Menu(gin::Arguments* args);
   ~Menu() override;
 
-  // gin_helper::Wrappable:
-  void AfterInit(v8::Isolate* isolate) override;
+  // Returns a new callback which keeps references of the JS wrapper until the
+  // passed |callback| is called.
+  base::OnceClosure BindSelfToClosure(base::OnceClosure callback);
 
   // ui::SimpleMenuModel::Delegate:
   bool IsCommandIdChecked(int command_id) const override;
@@ -54,10 +64,15 @@ class Menu : public gin_helper::TrackableObject<Menu>,
       bool use_default_accelerator,
       ui::Accelerator* accelerator) const override;
   bool ShouldRegisterAcceleratorForCommandId(int command_id) const override;
+#if defined(OS_MAC)
+  bool GetSharingItemForCommandId(
+      int command_id,
+      ElectronMenuModel::SharingItem* item) const override;
+#endif
   void ExecuteCommand(int command_id, int event_flags) override;
   void OnMenuWillShow(ui::SimpleMenuModel* source) override;
 
-  virtual void PopupAt(TopLevelWindow* window,
+  virtual void PopupAt(BaseWindow* window,
                        int x,
                        int y,
                        int positioning_item,
@@ -70,11 +85,6 @@ class Menu : public gin_helper::TrackableObject<Menu>,
   // Observable:
   void OnMenuWillClose() override;
   void OnMenuWillShow() override;
-
- protected:
-  // Returns a new callback which keeps references of the JS wrapper until the
-  // passed |callback| is called.
-  base::OnceClosure BindSelfToClosure(base::OnceClosure callback);
 
  private:
   void InsertItemAt(int index, int command_id, const base::string16& label);
@@ -107,19 +117,6 @@ class Menu : public gin_helper::TrackableObject<Menu>,
   bool IsVisibleAt(int index) const;
   bool WorksWhenHiddenAt(int index) const;
 
-  // Stored delegate methods.
-  base::RepeatingCallback<bool(v8::Local<v8::Value>, int)> is_checked_;
-  base::RepeatingCallback<bool(v8::Local<v8::Value>, int)> is_enabled_;
-  base::RepeatingCallback<bool(v8::Local<v8::Value>, int)> is_visible_;
-  base::RepeatingCallback<bool(v8::Local<v8::Value>, int)> works_when_hidden_;
-  base::RepeatingCallback<v8::Local<v8::Value>(v8::Local<v8::Value>, int, bool)>
-      get_accelerator_;
-  base::RepeatingCallback<bool(v8::Local<v8::Value>, int)>
-      should_register_accelerator_;
-  base::RepeatingCallback<void(v8::Local<v8::Value>, v8::Local<v8::Value>, int)>
-      execute_command_;
-  base::RepeatingCallback<void(v8::Local<v8::Value>)> menu_will_show_;
-
   DISALLOW_COPY_AND_ASSIGN(Menu);
 };
 
@@ -134,7 +131,7 @@ struct Converter<electron::ElectronMenuModel*> {
   static bool FromV8(v8::Isolate* isolate,
                      v8::Local<v8::Value> val,
                      electron::ElectronMenuModel** out) {
-    // null would be tranfered to NULL.
+    // null would be transferred to NULL.
     if (val->IsNull()) {
       *out = nullptr;
       return true;

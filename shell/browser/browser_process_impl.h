@@ -77,10 +77,10 @@ class BrowserProcessImpl : public BrowserProcess {
   BackgroundModeManager* background_mode_manager() override;
   StatusTray* status_tray() override;
   safe_browsing::SafeBrowsingService* safe_browsing_service() override;
-  safe_browsing::ClientSideDetectionService* safe_browsing_detection_service()
-      override;
   subresource_filter::RulesetService* subresource_filter_ruleset_service()
       override;
+  federated_learning::FlocSortingLshClustersService*
+  floc_sorting_lsh_clusters_service() override;
   optimization_guide::OptimizationGuideService* optimization_guide_service()
       override;
   component_updater::ComponentUpdateService* component_updater() override;

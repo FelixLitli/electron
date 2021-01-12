@@ -34,19 +34,19 @@ void ZoomModeToZoomSettings(WebContentsZoomController::ZoomMode zoom_mode,
                             api::tabs::ZoomSettings* zoom_settings) {
   DCHECK(zoom_settings);
   switch (zoom_mode) {
-    case WebContentsZoomController::ZoomMode::DEFAULT:
+    case WebContentsZoomController::ZoomMode::kDefault:
       zoom_settings->mode = api::tabs::ZOOM_SETTINGS_MODE_AUTOMATIC;
       zoom_settings->scope = api::tabs::ZOOM_SETTINGS_SCOPE_PER_ORIGIN;
       break;
-    case WebContentsZoomController::ZoomMode::ISOLATED:
+    case WebContentsZoomController::ZoomMode::kIsolated:
       zoom_settings->mode = api::tabs::ZOOM_SETTINGS_MODE_AUTOMATIC;
       zoom_settings->scope = api::tabs::ZOOM_SETTINGS_SCOPE_PER_TAB;
       break;
-    case WebContentsZoomController::ZoomMode::MANUAL:
+    case WebContentsZoomController::ZoomMode::kManual:
       zoom_settings->mode = api::tabs::ZOOM_SETTINGS_MODE_MANUAL;
       zoom_settings->scope = api::tabs::ZOOM_SETTINGS_SCOPE_PER_TAB;
       break;
-    case WebContentsZoomController::ZoomMode::DISABLED:
+    case WebContentsZoomController::ZoomMode::kDisabled:
       zoom_settings->mode = api::tabs::ZOOM_SETTINGS_MODE_DISABLED;
       zoom_settings->scope = api::tabs::ZOOM_SETTINGS_SCOPE_PER_TAB;
       break;
@@ -92,8 +92,7 @@ bool ExecuteCodeInTabFunction::CanExecuteScriptOnPage(std::string* error) {
   // If |tab_id| is specified, look for the tab. Otherwise default to selected
   // tab in the current window.
   CHECK_GE(execute_tab_id_, 0);
-  auto* contents = electron::api::WebContents::FromWeakMapID(
-      v8::Isolate::GetCurrent(), execute_tab_id_);
+  auto* contents = electron::api::WebContents::FromID(execute_tab_id_);
   if (!contents) {
     return false;
   }
@@ -146,8 +145,7 @@ bool ExecuteCodeInTabFunction::CanExecuteScriptOnPage(std::string* error) {
 
 ScriptExecutor* ExecuteCodeInTabFunction::GetScriptExecutor(
     std::string* error) {
-  auto* contents = electron::api::WebContents::FromWeakMapID(
-      v8::Isolate::GetCurrent(), execute_tab_id_);
+  auto* contents = electron::api::WebContents::FromID(execute_tab_id_);
   if (!contents)
     return nullptr;
   return contents->script_executor();
@@ -165,13 +163,16 @@ bool TabsExecuteScriptFunction::ShouldInsertCSS() const {
   return false;
 }
 
+bool TabsExecuteScriptFunction::ShouldRemoveCSS() const {
+  return false;
+}
+
 ExtensionFunction::ResponseAction TabsGetFunction::Run() {
   std::unique_ptr<tabs::Get::Params> params(tabs::Get::Params::Create(*args_));
   EXTENSION_FUNCTION_VALIDATE(params.get());
   int tab_id = params->tab_id;
 
-  auto* contents = electron::api::WebContents::FromWeakMapID(
-      v8::Isolate::GetCurrent(), tab_id);
+  auto* contents = electron::api::WebContents::FromID(tab_id);
   if (!contents)
     return RespondNow(Error("No such tab"));
 
@@ -193,8 +194,7 @@ ExtensionFunction::ResponseAction TabsSetZoomFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(params);
 
   int tab_id = params->tab_id ? *params->tab_id : -1;
-  auto* contents = electron::api::WebContents::FromWeakMapID(
-      v8::Isolate::GetCurrent(), tab_id);
+  auto* contents = electron::api::WebContents::FromID(tab_id);
   if (!contents)
     return RespondNow(Error("No such tab"));
 
@@ -222,8 +222,7 @@ ExtensionFunction::ResponseAction TabsGetZoomFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(params);
 
   int tab_id = params->tab_id ? *params->tab_id : -1;
-  auto* contents = electron::api::WebContents::FromWeakMapID(
-      v8::Isolate::GetCurrent(), tab_id);
+  auto* contents = electron::api::WebContents::FromID(tab_id);
   if (!contents)
     return RespondNow(Error("No such tab"));
 
@@ -239,8 +238,7 @@ ExtensionFunction::ResponseAction TabsGetZoomSettingsFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(params);
 
   int tab_id = params->tab_id ? *params->tab_id : -1;
-  auto* contents = electron::api::WebContents::FromWeakMapID(
-      v8::Isolate::GetCurrent(), tab_id);
+  auto* contents = electron::api::WebContents::FromID(tab_id);
   if (!contents)
     return RespondNow(Error("No such tab"));
 
@@ -265,8 +263,7 @@ ExtensionFunction::ResponseAction TabsSetZoomSettingsFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(params);
 
   int tab_id = params->tab_id ? *params->tab_id : -1;
-  auto* contents = electron::api::WebContents::FromWeakMapID(
-      v8::Isolate::GetCurrent(), tab_id);
+  auto* contents = electron::api::WebContents::FromID(tab_id);
   if (!contents)
     return RespondNow(Error("No such tab"));
 
@@ -285,24 +282,24 @@ ExtensionFunction::ResponseAction TabsSetZoomSettingsFunction::Run() {
   // Determine the correct internal zoom mode to set |web_contents| to from the
   // user-specified |zoom_settings|.
   WebContentsZoomController::ZoomMode zoom_mode =
-      WebContentsZoomController::ZoomMode::DEFAULT;
+      WebContentsZoomController::ZoomMode::kDefault;
   switch (params->zoom_settings.mode) {
     case tabs::ZOOM_SETTINGS_MODE_NONE:
     case tabs::ZOOM_SETTINGS_MODE_AUTOMATIC:
       switch (params->zoom_settings.scope) {
         case tabs::ZOOM_SETTINGS_SCOPE_NONE:
         case tabs::ZOOM_SETTINGS_SCOPE_PER_ORIGIN:
-          zoom_mode = WebContentsZoomController::ZoomMode::DEFAULT;
+          zoom_mode = WebContentsZoomController::ZoomMode::kDefault;
           break;
         case tabs::ZOOM_SETTINGS_SCOPE_PER_TAB:
-          zoom_mode = WebContentsZoomController::ZoomMode::ISOLATED;
+          zoom_mode = WebContentsZoomController::ZoomMode::kIsolated;
       }
       break;
     case tabs::ZOOM_SETTINGS_MODE_MANUAL:
-      zoom_mode = WebContentsZoomController::ZoomMode::MANUAL;
+      zoom_mode = WebContentsZoomController::ZoomMode::kManual;
       break;
     case tabs::ZOOM_SETTINGS_MODE_DISABLED:
-      zoom_mode = WebContentsZoomController::ZoomMode::DISABLED;
+      zoom_mode = WebContentsZoomController::ZoomMode::kDisabled;
   }
 
   contents->GetZoomController()->SetZoomMode(zoom_mode);

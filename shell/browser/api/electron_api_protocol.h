@@ -10,13 +10,13 @@
 
 #include "content/public/browser/content_browser_client.h"
 #include "gin/handle.h"
+#include "gin/wrappable.h"
 #include "shell/browser/net/electron_url_loader_factory.h"
-#include "shell/common/gin_helper/dictionary.h"
-#include "shell/common/gin_helper/trackable_object.h"
 
 namespace electron {
 
 class ElectronBrowserContext;
+class ProtocolRegistry;
 
 namespace api {
 
@@ -27,30 +27,27 @@ void RegisterSchemesAsPrivileged(gin_helper::ErrorThrower thrower,
 
 // Possible errors.
 enum class ProtocolError {
-  OK,  // no error
-  REGISTERED,
-  NOT_REGISTERED,
-  INTERCEPTED,
-  NOT_INTERCEPTED,
+  kOK,  // no error
+  kRegistered,
+  kNotRegistered,
+  kIntercepted,
+  kNotIntercepted,
 };
 
 // Protocol implementation based on network services.
-class Protocol : public gin_helper::TrackableObject<Protocol> {
+class Protocol : public gin::Wrappable<Protocol> {
  public:
   static gin::Handle<Protocol> Create(v8::Isolate* isolate,
                                       ElectronBrowserContext* browser_context);
 
-  static void BuildPrototype(v8::Isolate* isolate,
-                             v8::Local<v8::FunctionTemplate> prototype);
-
-  // Used by ElectronBrowserClient for creating URLLoaderFactory.
-  void RegisterURLLoaderFactories(
-      content::ContentBrowserClient::NonNetworkURLLoaderFactoryMap* factories);
-
-  const HandlersMap& intercept_handlers() const { return intercept_handlers_; }
+  // gin::Wrappable
+  static gin::WrapperInfo kWrapperInfo;
+  gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
+      v8::Isolate* isolate) override;
+  const char* GetTypeName() override;
 
  private:
-  Protocol(v8::Isolate* isolate, ElectronBrowserContext* browser_context);
+  Protocol(v8::Isolate* isolate, ProtocolRegistry* protocol_registry);
   ~Protocol() override;
 
   // Callback types.
@@ -61,13 +58,13 @@ class Protocol : public gin_helper::TrackableObject<Protocol> {
   ProtocolError RegisterProtocol(ProtocolType type,
                                  const std::string& scheme,
                                  const ProtocolHandler& handler);
-  void UnregisterProtocol(const std::string& scheme, gin::Arguments* args);
+  bool UnregisterProtocol(const std::string& scheme, gin::Arguments* args);
   bool IsProtocolRegistered(const std::string& scheme);
 
   ProtocolError InterceptProtocol(ProtocolType type,
                                   const std::string& scheme,
                                   const ProtocolHandler& handler);
-  void UninterceptProtocol(const std::string& scheme, gin::Arguments* args);
+  bool UninterceptProtocol(const std::string& scheme, gin::Arguments* args);
   bool IsProtocolIntercepted(const std::string& scheme);
 
   // Old async version of IsProtocolRegistered.
@@ -76,23 +73,28 @@ class Protocol : public gin_helper::TrackableObject<Protocol> {
 
   // Helper for converting old registration APIs to new RegisterProtocol API.
   template <ProtocolType type>
-  void RegisterProtocolFor(const std::string& scheme,
+  bool RegisterProtocolFor(const std::string& scheme,
                            const ProtocolHandler& handler,
                            gin::Arguments* args) {
-    HandleOptionalCallback(args, RegisterProtocol(type, scheme, handler));
+    auto result = RegisterProtocol(type, scheme, handler);
+    HandleOptionalCallback(args, result);
+    return result == ProtocolError::kOK;
   }
   template <ProtocolType type>
-  void InterceptProtocolFor(const std::string& scheme,
+  bool InterceptProtocolFor(const std::string& scheme,
                             const ProtocolHandler& handler,
                             gin::Arguments* args) {
-    HandleOptionalCallback(args, InterceptProtocol(type, scheme, handler));
+    auto result = InterceptProtocol(type, scheme, handler);
+    HandleOptionalCallback(args, result);
+    return result == ProtocolError::kOK;
   }
 
   // Be compatible with old interface, which accepts optional callback.
   void HandleOptionalCallback(gin::Arguments* args, ProtocolError error);
 
-  HandlersMap handlers_;
-  HandlersMap intercept_handlers_;
+  // Weak pointer; the lifetime of the ProtocolRegistry is guaranteed to be
+  // longer than the lifetime of this JS interface.
+  ProtocolRegistry* protocol_registry_;
 };
 
 }  // namespace api

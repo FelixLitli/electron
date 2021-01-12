@@ -15,16 +15,17 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/public/common/content_constants.h"
+#include "content/public/common/content_switches.h"
 #include "electron/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "ppapi/buildflags/buildflags.h"
-#include "shell/browser/electron_paths.h"
+#include "shell/common/electron_paths.h"
 #include "shell/common/options_switches.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "url/url_constants.h"
 // In SHARED_INTERMEDIATE_DIR.
-#include "widevine_cdm_version.h"  // NOLINT(build/include)
+#include "widevine_cdm_version.h"  // NOLINT(build/include_directory)
 
 #if defined(WIDEVINE_CDM_AVAILABLE)
 #include "base/native_library.h"
@@ -48,29 +49,34 @@ namespace electron {
 
 namespace {
 
+enum class WidevineCdmFileCheck {
+  kNotChecked,
+  kFound,
+  kNotFound,
+};
+
 #if defined(WIDEVINE_CDM_AVAILABLE)
 bool IsWidevineAvailable(
     base::FilePath* cdm_path,
     std::vector<media::VideoCodec>* codecs_supported,
     base::flat_set<media::CdmSessionType>* session_types_supported,
     base::flat_set<media::EncryptionMode>* modes_supported) {
-  static enum {
-    NOT_CHECKED,
-    FOUND,
-    NOT_FOUND,
-  } widevine_cdm_file_check = NOT_CHECKED;
+  static WidevineCdmFileCheck widevine_cdm_file_check =
+      WidevineCdmFileCheck::kNotChecked;
 
-  if (widevine_cdm_file_check == NOT_CHECKED) {
+  if (widevine_cdm_file_check == WidevineCdmFileCheck::kNotChecked) {
     base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
     *cdm_path = command_line->GetSwitchValuePath(switches::kWidevineCdmPath);
     if (!cdm_path->empty()) {
       *cdm_path = cdm_path->AppendASCII(
           base::GetNativeLibraryName(kWidevineCdmLibraryName));
-      widevine_cdm_file_check = base::PathExists(*cdm_path) ? FOUND : NOT_FOUND;
+      widevine_cdm_file_check = base::PathExists(*cdm_path)
+                                    ? WidevineCdmFileCheck::kFound
+                                    : WidevineCdmFileCheck::kNotFound;
     }
   }
 
-  if (widevine_cdm_file_check == FOUND) {
+  if (widevine_cdm_file_check == WidevineCdmFileCheck::kFound) {
     // Add the supported codecs as if they came from the component manifest.
     // This list must match the CDM that is being bundled with Chrome.
     codecs_supported->push_back(media::VideoCodec::kCodecVP8);
@@ -94,59 +100,6 @@ bool IsWidevineAvailable(
   return false;
 }
 #endif  // defined(WIDEVINE_CDM_AVAILABLE)
-
-#if BUILDFLAG(ENABLE_PEPPER_FLASH)
-content::PepperPluginInfo CreatePepperFlashInfo(const base::FilePath& path,
-                                                const std::string& version) {
-  content::PepperPluginInfo plugin;
-
-  plugin.is_out_of_process = true;
-  plugin.name = content::kFlashPluginName;
-  plugin.path = path;
-  plugin.permissions = ppapi::PERMISSION_ALL_BITS;
-
-  std::vector<std::string> flash_version_numbers = base::SplitString(
-      version, ".", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-  if (flash_version_numbers.empty())
-    flash_version_numbers.emplace_back("11");
-  // |SplitString()| puts in an empty string given an empty string. :(
-  else if (flash_version_numbers[0].empty())
-    flash_version_numbers[0] = "11";
-  if (flash_version_numbers.size() < 2)
-    flash_version_numbers.emplace_back("2");
-  if (flash_version_numbers.size() < 3)
-    flash_version_numbers.emplace_back("999");
-  if (flash_version_numbers.size() < 4)
-    flash_version_numbers.emplace_back("999");
-  // E.g., "Shockwave Flash 10.2 r154":
-  plugin.description = plugin.name + " " + flash_version_numbers[0] + "." +
-                       flash_version_numbers[1] + " r" +
-                       flash_version_numbers[2];
-  plugin.version = base::JoinString(flash_version_numbers, ".");
-  plugin.mime_types.emplace_back(content::kFlashPluginSwfMimeType,
-                                 content::kFlashPluginSwfExtension,
-                                 content::kFlashPluginSwfDescription);
-  plugin.mime_types.emplace_back(content::kFlashPluginSplMimeType,
-                                 content::kFlashPluginSplExtension,
-                                 content::kFlashPluginSplDescription);
-
-  return plugin;
-}
-
-void AddPepperFlashFromCommandLine(
-    base::CommandLine* command_line,
-    std::vector<content::PepperPluginInfo>* plugins) {
-  base::FilePath flash_path =
-      command_line->GetSwitchValuePath(switches::kPpapiFlashPath);
-  if (flash_path.empty())
-    return;
-
-  auto flash_version =
-      command_line->GetSwitchValueASCII(switches::kPpapiFlashVersion);
-
-  plugins->push_back(CreatePepperFlashInfo(flash_path, flash_version));
-}
-#endif  // BUILDFLAG(ENABLE_PEPPER_FLASH)
 
 #if BUILDFLAG(ENABLE_PLUGINS)
 void ComputeBuiltInPlugins(std::vector<content::PepperPluginInfo>* plugins) {
@@ -231,16 +184,27 @@ base::RefCountedMemory* ElectronContentClient::GetDataResourceBytes(
 }
 
 void ElectronContentClient::AddAdditionalSchemes(Schemes* schemes) {
-  AppendDelimitedSwitchToVector(switches::kServiceWorkerSchemes,
-                                &schemes->service_worker_schemes);
-  AppendDelimitedSwitchToVector(switches::kStandardSchemes,
-                                &schemes->standard_schemes);
-  AppendDelimitedSwitchToVector(switches::kSecureSchemes,
-                                &schemes->secure_schemes);
-  AppendDelimitedSwitchToVector(switches::kBypassCSPSchemes,
-                                &schemes->csp_bypassing_schemes);
-  AppendDelimitedSwitchToVector(switches::kCORSSchemes,
-                                &schemes->cors_enabled_schemes);
+  auto* command_line = base::CommandLine::ForCurrentProcess();
+  std::string process_type =
+      command_line->GetSwitchValueASCII(::switches::kProcessType);
+  // Browser Process registration happens in
+  // `api::Protocol::RegisterSchemesAsPrivileged`
+  //
+  // Renderer Process registration happens in `RendererClientBase`
+  //
+  // We use this for registration to network utility process
+  if (process_type == ::switches::kUtilityProcess) {
+    AppendDelimitedSwitchToVector(switches::kServiceWorkerSchemes,
+                                  &schemes->service_worker_schemes);
+    AppendDelimitedSwitchToVector(switches::kStandardSchemes,
+                                  &schemes->standard_schemes);
+    AppendDelimitedSwitchToVector(switches::kSecureSchemes,
+                                  &schemes->secure_schemes);
+    AppendDelimitedSwitchToVector(switches::kBypassCSPSchemes,
+                                  &schemes->csp_bypassing_schemes);
+    AppendDelimitedSwitchToVector(switches::kCORSSchemes,
+                                  &schemes->cors_enabled_schemes);
+  }
 
   schemes->service_worker_schemes.emplace_back(url::kFileScheme);
   schemes->standard_schemes.emplace_back(extensions::kExtensionScheme);
@@ -248,10 +212,6 @@ void ElectronContentClient::AddAdditionalSchemes(Schemes* schemes) {
 
 void ElectronContentClient::AddPepperPlugins(
     std::vector<content::PepperPluginInfo>* plugins) {
-#if BUILDFLAG(ENABLE_PEPPER_FLASH)
-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  AddPepperFlashFromCommandLine(command_line, plugins);
-#endif  // BUILDFLAG(ENABLE_PEPPER_FLASH)
 #if BUILDFLAG(ENABLE_PLUGINS)
   ComputeBuiltInPlugins(plugins);
 #endif  // BUILDFLAG(ENABLE_PLUGINS)
